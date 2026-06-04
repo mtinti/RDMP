@@ -1,0 +1,30 @@
+# Catalogue manifest: the metadata the Builder is allowed to use.
+# This is the SANITISED, data-free description of your catalogues (no patient rows).
+# Replace this sample with a manifest generated from your real RDMP metadata.
+identifier_column: chi   # patient identifier dimension used for every cohort set
+
+catalogues:
+  - name: Prescribing
+    columns: [chi, prescribed_date, drug_name, bnf_code]
+    filters:
+      - name: Diazepam
+        description: Records where the prescribed drug is Diazepam
+        where: "drug_name = 'Diazepam'"
+      - name: PrescribedAfter
+        description: Prescribed on/after a parameterised date
+        where: "prescribed_date >= @date"
+        parameters: [date]
+
+  - name: Demography
+    columns: [chi, date_of_birth, date_of_death, sex]
+    filters:
+      - name: Alive
+        description: Patient has no recorded date of death
+        where: "date_of_death IS NULL"
+
+  - name: Admissions
+    columns: [chi, admission_date, main_condition_icd10]
+    filters:
+      - name: DiabetesDiagnosis
+        description: Admission with a diabetes ICD-10 code (E10-E14)
+        where: "main_condition_icd10 LIKE 'E1[0-4]%'"

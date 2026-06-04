@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>RdmpCohortExport</id>
+    <version>0.0.1</version>
+    <authors>HIC</authors>
+    <description>Exports a Cohort Identification Configuration as a data-free training triple
+      (requirement.md + build.script.yaml + query.sql) for the cohort-agent project.</description>
+    <dependencies>
+      <!-- Set to match the running RDMP major/minor version in NHS. -->
+      <dependency id="HIC.RDMP.Plugin" version="8.0" />
+    </dependencies>
+  </metadata>
+  <files>
+    <!-- Adjust 'net10.0' to your build's TFM. -->
+    <file src="bin\Release\net10.0\RdmpCohortExport.dll" target="lib\main" />
+  </files>
+</package>

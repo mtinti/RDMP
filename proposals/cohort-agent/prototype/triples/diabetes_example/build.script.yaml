@@ -1,0 +1,11 @@
+Commands:
+  - CreateNewCohortIdentificationConfiguration "Diabetes Diazepam Alive Cohort"
+  - SetContainerOperation CohortAggregateContainer:"Root Container" EXCEPT
+  - AddCohortSubContainer CohortAggregateContainer:"Root Container"
+  - SetContainerOperation CohortAggregateContainer:"Inclusion Criteria" INTERSECT
+  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:"Inclusion Criteria" Catalogue:Admissions
+  - CreateNewFilter AggregateConfiguration:Admissions "DiabetesOnOrAfter2010" "main_condition_icd10 LIKE 'E1[0-4]%' AND admission_date >= '2010-01-01'"
+  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:"Inclusion Criteria" Catalogue:Prescribing
+  - CreateNewFilter AggregateConfiguration:Prescribing "Diazepam" "drug_name = 'Diazepam'"
+  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:"Root Container" Catalogue:Demography
+  - CreateNewFilter AggregateConfiguration:Demography "HasDied" "date_of_death IS NOT NULL"

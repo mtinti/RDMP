@@ -1,0 +1,144 @@
+// Exports a Cohort Identification Configuration (CIC) as a data-free training triple:
+//   <out>/<cic>/requirement.md   <out>/<cic>/build.script.yaml   <out>/<cic>/query.sql
+//
+// This is the verification copy of the cohort-export plugin command, placed in Rdmp.Core so
+// the CLI's MEF discovery exposes it as `rdmp cmd ExportCohortAsScript` for round-trip testing.
+// The shippable plugin (proposals/cohort-agent/plugin) carries the identical traversal logic.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using Rdmp.Core.Curation.Data;
+using Rdmp.Core.Curation.Data.Aggregation;
+using Rdmp.Core.Curation.Data.Cohort;
+using Rdmp.Core.QueryBuilding;
+
+namespace Rdmp.Core.CommandExecution.AtomicCommands;
+
+public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
+{
+    private readonly CohortIdentificationConfiguration _cic;
+    private readonly DirectoryInfo _outDir;
+
+    public ExecuteCommandExportCohortAsScript(IBasicActivateItems activator,
+        [DemandsInitialization("The cohort to export")]
+        CohortIdentificationConfiguration cic,
+        [DemandsInitialization("Folder to write the export into")]
+        DirectoryInfo toDir = null) : base(activator)
+    {
+        _cic = cic;
+        _outDir = toDir ?? new DirectoryInfo(Environment.CurrentDirectory);
+
+        if (_cic == null)
+            SetImpossible("No CohortIdentificationConfiguration was supplied");
+    }
+
+    public override void Execute()
+    {
+        base.Execute();
+
+        var dir = new DirectoryInfo(Path.Combine(_outDir.FullName, Sanitise(_cic.Name)));
+        dir.Create();
+
+        File.WriteAllText(Path.Combine(dir.FullName, "requirement.md"),
+            $"# {_cic.Name}\n\n{_cic.Description ?? "(no description set on the CIC)"}\n");
+
+        File.WriteAllText(Path.Combine(dir.FullName, "build.script.yaml"), BuildScript());
+
+        // SQL generation is best-effort: it can require reaching the data server, which may
+        // not be available. The script (the round-trip target) does not depend on it.
+        string sql;
+        try
+        {
+            sql = new CohortQueryBuilder(_cic, null).SQL ?? "";
+        }
+        catch (Exception e)
+        {
+            sql = $"-- SQL generation failed: {e.Message}";
+        }
+        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), sql);
+
+        BasicActivator.Show($"Exported '{_cic.Name}' to {dir.FullName}");
+    }
+
+    private string BuildScript()
+    {
+        var lines = new List<string>
+        {
+            $"# Decompiled from CohortIdentificationConfiguration ID {_cic.ID}",
+            "Commands:",
+            $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\"",
+        };
+
+        var root = _cic.RootCohortAggregateContainer;
+        if (root != null)
+            EmitContainer(root, lines);
+        else
+            lines.Add("  # (this CIC has no root container)");
+
+        return string.Join("\n", lines) + "\n";
+    }
+
+    // Containers and aggregates are referenced by stable handles ($c<id> / $a<id>) rather than
+    // by name: names are not guaranteed unique or meaningful (an unnamed sub-container reports
+    // its operation as its name). The trailing comment keeps the script human-readable.
+    private static string ContainerRef(CohortAggregateContainer c) => $"$c{c.ID}";
+    private static string AggregateRef(AggregateConfiguration a) => $"$a{a.ID}";
+
+    private void EmitContainer(CohortAggregateContainer container, List<string> lines)
+    {
+        var cref = ContainerRef(container);
+        lines.Add($"  - SetContainerOperation CohortAggregateContainer:{cref} {container.Operation}   # {container.Name}");
+
+        foreach (var content in container.GetOrderedContents())
+            switch (content)
+            {
+                case AggregateConfiguration agg:
+                    EmitAggregate(agg, cref, lines);
+                    break;
+                case CohortAggregateContainer sub:
+                    lines.Add($"  - AddCohortSubContainer CohortAggregateContainer:{cref}");
+                    EmitContainer(sub, lines);
+                    break;
+            }
+    }
+
+    private void EmitAggregate(AggregateConfiguration agg, string containerRef, List<string> lines)
+    {
+        var cata = agg.Catalogue;
+        var cataRef = cata != null ? Quote(cata.Name) : "<unknown-catalogue>";
+        lines.Add(
+            $"  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:{containerRef} Catalogue:{cataRef}   # creates {AggregateRef(agg)}");
+
+        foreach (var dim in agg.AggregateDimensions)
+            lines.Add($"  # dimension: {dim.GetRuntimeName()}   (auto-set when catalogue added)");
+
+        if (agg.RootFilterContainer is { } fc)
+            EmitFilters(fc, AggregateRef(agg), lines);
+    }
+
+    private void EmitFilters(IContainer fc, string hostRef, List<string> lines)
+    {
+        foreach (var filter in fc.GetFilters())
+            lines.Add(
+                $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"");
+
+        var subs = fc.GetSubContainers();
+        if (subs.Length > 0)
+            lines.Add($"  # nested filter group(s) under operation {fc.Operation}: AddNewFilterContainer + SetContainerOperation");
+        foreach (var sub in subs)
+            EmitFilters(sub, hostRef, lines);
+    }
+
+    private static string Quote(string name) => $"\"{name}\"";
+    private static string OneLine(string sql) => (sql ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+
+    private static string Sanitise(string name)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in name)
+            sb.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
+        return sb.ToString();
+    }
+}
