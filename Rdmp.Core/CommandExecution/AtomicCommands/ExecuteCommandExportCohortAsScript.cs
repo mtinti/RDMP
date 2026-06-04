@@ -51,20 +51,31 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
         File.WriteAllText(Path.Combine(dir.FullName, "build.script.yaml"), BuildScript());
 
-        // SQL generation is best-effort: it can require reaching the data server, which may
-        // not be available. The script (the round-trip target) does not depend on it.
-        string sql;
+        // query.sql: the SQL as RDMP would run it - this uses the cohort's QueryCache if one
+        // is configured (so it references cache tables). SQL generation is best-effort.
+        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), BuildSql(useCache: true));
+
+        // query.uncached.sql: the full query against the raw tables, cache bypassed. Only emitted
+        // when a cache is configured (otherwise query.sql is already the un-cached query).
+        if (_cic.QueryCachingServer_ID.HasValue)
+            File.WriteAllText(Path.Combine(dir.FullName, "query.uncached.sql"), BuildSql(useCache: false));
+
+        BasicActivator.Show($"Exported '{_cic.Name}' to {dir.FullName}");
+    }
+
+    private string BuildSql(bool useCache)
+    {
         try
         {
-            sql = new CohortQueryBuilder(_cic, null).SQL ?? "";
+            var builder = new CohortQueryBuilder(_cic, null);
+            if (!useCache && _cic.QueryCachingServer_ID.HasValue)
+                builder.CacheServer = null; // force the query to run against the raw tables
+            return builder.SQL ?? "";
         }
         catch (Exception e)
         {
-            sql = $"-- SQL generation failed: {e.Message}";
+            return $"-- SQL generation failed: {e.Message}";
         }
-        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), sql);
-
-        BasicActivator.Show($"Exported '{_cic.Name}' to {dir.FullName}");
     }
 
     private string BuildScript()

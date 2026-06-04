@@ -62,19 +62,30 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         // 2) build.script.yaml - reconstruct the equivalent rdmp cmd script from the tree
         File.WriteAllText(Path.Combine(dir.FullName, "build.script.yaml"), BuildScript());
 
-        // 3) query.sql - the SQL RDMP generates for this cohort (best-effort)
-        string sql;
+        // 3) query.sql - the SQL RDMP generates (uses the cohort's QueryCache if configured)
+        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), BuildSql(useCache: true));
+
+        // 3b) query.uncached.sql - full query against the raw tables (cache bypassed). Only
+        //     written when a cache is configured; otherwise query.sql is already un-cached.
+        if (_cic.QueryCachingServer_ID.HasValue)
+            File.WriteAllText(Path.Combine(dir.FullName, "query.uncached.sql"), BuildSql(useCache: false));
+
+        BasicActivator.Show($"Exported '{_cic.Name}' to {dir.FullName}");
+    }
+
+    private string BuildSql(bool useCache)
+    {
         try
         {
-            sql = new CohortQueryBuilder(_cic, null).SQL ?? "";
+            var builder = new CohortQueryBuilder(_cic, null);
+            if (!useCache && _cic.QueryCachingServer_ID.HasValue)
+                builder.CacheServer = null; // force the query to run against the raw tables
+            return builder.SQL ?? "";
         }
         catch (Exception e)
         {
-            sql = $"-- SQL generation failed: {e.Message}";
+            return $"-- SQL generation failed: {e.Message}";
         }
-        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), sql);
-
-        BasicActivator.Show($"Exported '{_cic.Name}' to {dir.FullName}");
     }
 
     private string BuildScript()
