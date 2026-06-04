@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using Rdmp.Core;
 using Rdmp.Core.CommandExecution;
 using Rdmp.Core.CommandExecution.AtomicCommands;
+using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Cohort;
 
 namespace RdmpCohortExport;
@@ -19,5 +20,8 @@ public class CohortExportPluginUserInterface : PluginUserInterface
     {
         if (o is CohortIdentificationConfiguration cic)
             yield return new ExecuteCommandExportCohortAsScript(BasicActivator, cic);
+
+        if (o is Catalogue cata)
+            yield return new ExecuteCommandExportCatalogueManifest(BasicActivator, cata);
     }
 }

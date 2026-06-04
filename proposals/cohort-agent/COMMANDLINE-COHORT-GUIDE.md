@@ -61,8 +61,14 @@ Some published filters also ship named value presets (`ExtractionFilterParameter
 choose at import time.
 
 > Where do the ExtractionFilter IDs come from? They live in the Catalogue. For building NEW
-> cohorts the Builder needs a *catalogue manifest* listing, per catalogue, its published
-> filters (id, name, WHERE SQL, parameters). That manifest is dumped the same way as cohorts.
+> cohorts the Builder needs the menu of available filters per catalogue. Dump it with:
+> ```
+> rdmp cmd ExportCatalogueManifest                     # all catalogues -> ./catalogue-manifest.yaml
+> rdmp cmd ExportCatalogueManifest Catalogue:18210 .\m.yaml
+> ```
+> Each catalogue entry lists its `columns`, `identifier_columns`, and `filters`
+> (id, name, where, parameters). The Builder picks a filter by reading its meaning and
+> references it by `id`; the Verifier checks the chosen filter's `where` against the requirement.
 
 ## 5. How the dumped build maps back to these commands
 `ExportCohortAsScript` walks an existing CIC and emits exactly this language:
