@@ -98,12 +98,65 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         };
 
         var root = _cic.RootCohortAggregateContainer;
+
+        // SQL parameters (e.g. @indexDate) declared globally or carried by the cohort's filters.
+        // RDMP hoists these to the top of the generated SQL; capture them so the script is complete.
+        EmitParameters(root, lines);
+
         if (root != null)
             EmitContainer(root, lines);
         else
             lines.Add("  # (this CIC has no root container)");
 
         return string.Join("\n", lines) + "\n";
+    }
+
+    private void EmitParameters(CohortAggregateContainer root, List<string> lines)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var collected = new List<ISqlParameter>();
+
+        void Collect(IEnumerable<ISqlParameter> ps)
+        {
+            foreach (var p in ps ?? Array.Empty<ISqlParameter>())
+                if (!string.IsNullOrWhiteSpace(p?.ParameterName) && seen.Add(p.ParameterName))
+                    collected.Add(p);
+        }
+
+        Collect(_cic.GetAllParameters());        // global parameters
+        if (root != null)
+            foreach (var f in AllFilters(root))
+                Collect(f.GetAllParameters());    // parameters carried by each filter
+
+        if (collected.Count == 0)
+            return;
+
+        lines.Add("  # --- SQL parameters used by this cohort (declared globally / by filters) ---");
+        foreach (var p in collected)
+        {
+            var comment = string.IsNullOrWhiteSpace(p.Comment) ? "" : $"   /* {OneLine(p.Comment)} */";
+            lines.Add($"  #   {OneLine(p.ParameterSQL)}   SET {p.ParameterName} = {OneLine(p.Value)}{comment}");
+        }
+    }
+
+    private static IEnumerable<IFilter> AllFilters(CohortAggregateContainer container)
+    {
+        foreach (var agg in container.GetAggregateConfigurations())
+            if (agg.RootFilterContainer is { } fc)
+                foreach (var f in FiltersIn(fc))
+                    yield return f;
+        foreach (var sub in container.GetSubContainers())
+            foreach (var f in AllFilters(sub))
+                yield return f;
+    }
+
+    private static IEnumerable<IFilter> FiltersIn(IContainer fc)
+    {
+        foreach (var f in fc.GetFilters())
+            yield return f;
+        foreach (var sub in fc.GetSubContainers())
+            foreach (var f in FiltersIn(sub))
+                yield return f;
     }
 
     // Containers and aggregates are referenced by stable handles ($c<id> / $a<id>) rather than

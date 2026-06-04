@@ -54,10 +54,13 @@ Findings folded in from that test:
 - `CohortQueryBuilder.SQL` can need the data server + a QueryCache for multi-set cohorts; the
   export guards it in try/catch so the script (the training target) always writes.
 
+## Handled
+- Global + filter SQL parameters (`ISqlParameter`, e.g. `@indexDate`) are captured as a
+  deduplicated comment block showing each one's `DECLARE`, value and comment.
+
 ## Still to handle inside NHS (add if your cohorts use them)
-- patient-index tables / joinables,
-  cohort parameters (`ISqlParameter`), filter parameters, and `OverrideFiltersByUsingParent…`
-  shortcuts. Nested AND/OR filter groups are flagged in a comment rather than fully scripted.
+- patient-index tables / joinables, and `OverrideFiltersByUsingParent…` shortcuts.
+  Nested AND/OR filter groups are flagged in a comment rather than fully scripted.
 - **Bulk export:** loop over `CatalogueRepository.GetAllObjects<CohortIdentificationConfiguration>()`
   to dump every cohort at once (easy to add as a second command).
 
