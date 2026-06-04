@@ -41,8 +41,13 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         var dir = new DirectoryInfo(Path.Combine(_outDir.FullName, Sanitise(_cic.Name)));
         dir.Create();
 
-        File.WriteAllText(Path.Combine(dir.FullName, "requirement.md"),
-            $"# {_cic.Name}\n\n{_cic.Description ?? "(no description set on the CIC)"}\n");
+        // requirement.md is an intentionally-empty placeholder. The natural-language
+        // requirement is added by hand later (extracted from the request form) - it is NOT
+        // taken from CIC.Description, which may be unrelated. Never overwrite a requirement
+        // that has already been filled in, so re-exporting is safe.
+        var reqPath = Path.Combine(dir.FullName, "requirement.md");
+        if (!File.Exists(reqPath))
+            File.WriteAllText(reqPath, $"<!-- Paste the natural-language requirement for '{_cic.Name}' here. -->\n");
 
         File.WriteAllText(Path.Combine(dir.FullName, "build.script.yaml"), BuildScript());
 

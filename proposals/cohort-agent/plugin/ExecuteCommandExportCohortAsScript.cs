@@ -51,16 +51,28 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         var dir = new DirectoryInfo(Path.Combine(_outDir.FullName, Sanitise(_cic.Name)));
         dir.Create();
 
-        // 1) requirement.md - the natural-language requirement lives in CIC.Description
-        File.WriteAllText(Path.Combine(dir.FullName, "requirement.md"),
-            $"# {_cic.Name}\n\n{_cic.Description ?? "(no description set on the CIC)"}\n");
+        // 1) requirement.md - an intentionally-empty placeholder. The natural-language
+        //    requirement is pasted in by hand later (from the request form); it is NOT taken
+        //    from CIC.Description (which may be unrelated). Never overwrite an already-filled
+        //    requirement, so re-exporting only refreshes the script + SQL.
+        var reqPath = Path.Combine(dir.FullName, "requirement.md");
+        if (!File.Exists(reqPath))
+            File.WriteAllText(reqPath, $"<!-- Paste the natural-language requirement for '{_cic.Name}' here. -->\n");
 
         // 2) build.script.yaml - reconstruct the equivalent rdmp cmd script from the tree
         File.WriteAllText(Path.Combine(dir.FullName, "build.script.yaml"), BuildScript());
 
-        // 3) query.sql - the SQL RDMP generates for this cohort
-        var builder = new CohortQueryBuilder(_cic, null);
-        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), builder.SQL ?? "");
+        // 3) query.sql - the SQL RDMP generates for this cohort (best-effort)
+        string sql;
+        try
+        {
+            sql = new CohortQueryBuilder(_cic, null).SQL ?? "";
+        }
+        catch (Exception e)
+        {
+            sql = $"-- SQL generation failed: {e.Message}";
+        }
+        File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), sql);
 
         BasicActivator.Show($"Exported '{_cic.Name}' to {dir.FullName}");
     }

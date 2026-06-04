@@ -5,7 +5,7 @@ Since nothing can leave NHS, we don't export a database. Instead this RDMP plugi
 small text files — the exact training triple the cohort-agent prototype consumes:
 
 ```
-<out>/<cohort name>/requirement.md     # the NL requirement, read from CIC.Description
+<out>/<cohort name>/requirement.md     # EMPTY placeholder - you paste the NL requirement here later
 <out>/<cohort name>/build.script.yaml  # equivalent `rdmp cmd` script, rebuilt from the tree
 <out>/<cohort name>/query.sql          # the SQL RDMP generates (CohortQueryBuilder)
 ```
