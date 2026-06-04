@@ -190,8 +190,15 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
     private void EmitFilters(IContainer fc, string hostRef, List<string> lines)
     {
         foreach (var filter in fc.GetFilters())
-            lines.Add(
-                $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"");
+            // If the filter was imported from a published (Catalogue) ExtractionFilter, re-import it
+            // BY REFERENCE: this re-creates the WHERE SQL AND its parameters (with values) automatically.
+            // Otherwise it's a hand-written filter, emitted with its literal WHERE SQL.
+            if (filter is AggregateFilter { ClonedFromExtractionFilter_ID: { } efid })
+                lines.Add(
+                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} ExtractionFilter:{efid}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
+            else
+                lines.Add(
+                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"");
 
         var subs = fc.GetSubContainers();
         if (subs.Length > 0)
