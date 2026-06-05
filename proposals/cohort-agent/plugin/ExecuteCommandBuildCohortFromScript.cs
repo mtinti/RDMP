@@ -36,8 +36,8 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
     {
         _scriptFile = scriptFile;
         _newName = newCohortName;
-        if (scriptFile == null || !scriptFile.Exists)
-            SetImpossible("Script file does not exist");
+        if (scriptFile != null && !scriptFile.Exists)
+            SetImpossible("Script file does not exist"); // null is allowed - the GUI prompts
     }
 
     private class ScriptDto { public string[] Commands { get; set; } }
@@ -46,7 +46,16 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
     {
         base.Execute();
 
-        var script = new Deserializer().Deserialize<ScriptDto>(File.ReadAllText(_scriptFile.FullName));
+        // From the GUI the file/name may be unset - prompt for them.
+        var file = _scriptFile ?? BasicActivator.SelectFile("Select build.script.yaml to rebuild", "Cohort script", "*.yaml");
+        if (file == null) return;
+        var newName = _newName;
+        if (string.IsNullOrWhiteSpace(newName) &&
+            (!BasicActivator.TypeText("Rebuild Cohort", "Name for the rebuilt cohort", 200, null, out newName, false)
+             || string.IsNullOrWhiteSpace(newName)))
+            return;
+
+        var script = new Deserializer().Deserialize<ScriptDto>(File.ReadAllText(file.FullName));
         if (script?.Commands == null || script.Commands.Length == 0)
             throw new Exception("Script contained no Commands");
 
@@ -69,8 +78,8 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
                 if (i >= 0) { binds = line[(i + 4)..].Trim(); line = line[..i]; }
 
                 if (line.StartsWith("CreateNewCohortIdentificationConfiguration", StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrWhiteSpace(_newName))
-                    line = $"CreateNewCohortIdentificationConfiguration \"{_newName}\"";
+                    && !string.IsNullOrWhiteSpace(newName))
+                    line = $"CreateNewCohortIdentificationConfiguration \"{newName}\"";
 
                 line = Substitute(line);
 
@@ -86,8 +95,8 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
             RestoreOrder(repo, adds);
         }
 
-        var cic = repo.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", _newName).FirstOrDefault();
-        BasicActivator.Show($"Rebuilt cohort '{_newName}'" + (cic != null ? $" (ID {cic.ID})" : ""));
+        var cic = repo.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", newName).FirstOrDefault();
+        BasicActivator.Show($"Rebuilt cohort '{newName}'" + (cic != null ? $" (ID {cic.ID})" : ""));
         if (cic != null) Publish(cic);
     }
 

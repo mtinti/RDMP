@@ -1,17 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Match the target framework of the RDMP build you run inside NHS. -->
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>RdmpCohortExport</AssemblyName>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- only this plugin's dll goes in the .rdmp; the host RDMP provides Rdmp.Core etc. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pin to the major.minor of the RDMP version running in NHS (see `rdmp --version`).
-         The plugin nuget bundles the command-execution + curation APIs used here. -->
-    <PackageReference Include="HIC.RDMP.Plugin" Version="*" />
+    <!-- Build against the in-tree RDMP so the plugin matches the running version exactly.
+         Private=false => Rdmp.Core.dll is NOT bundled into the plugin output. -->
+    <ProjectReference Include="../../../Rdmp.Core/Rdmp.Core.csproj">
+      <Private>false</Private>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>

@@ -4,15 +4,12 @@
     <id>RdmpCohortExport</id>
     <version>0.0.1</version>
     <authors>HIC</authors>
-    <description>Exports a Cohort Identification Configuration as a data-free training triple
-      (requirement.md + build.script.yaml + query.sql) for the cohort-agent project.</description>
+    <description>Export a cohort as a runnable script + a catalogue manifest, and rebuild a
+      cohort from an exported script (ExportCohortAsScript / ExportCatalogueManifest /
+      BuildCohortFromScript). Works from the CLI and the GUI right-click menus.</description>
     <dependencies>
-      <!-- Set to match the running RDMP major/minor version in NHS. -->
-      <dependency id="HIC.RDMP.Plugin" version="8.0" />
+      <!-- major.minor must match the running RDMP (set to your release, e.g. 9.2). -->
+      <dependency id="HIC.RDMP.Plugin" version="9.2" />
     </dependencies>
   </metadata>
-  <files>
-    <!-- Adjust 'net10.0' to your build's TFM. -->
-    <file src="bin\Release\net10.0\RdmpCohortExport.dll" target="lib\main" />
-  </files>
 </package>

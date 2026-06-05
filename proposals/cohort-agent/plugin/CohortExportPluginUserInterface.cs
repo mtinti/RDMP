@@ -1,5 +1,5 @@
-// Registers the export command on the right-click menu of a CohortIdentificationConfiguration.
-// RDMP auto-discovers PluginUserInterface subclasses in loaded plugin assemblies.
+// Surfaces the three commands in the RDMP desktop GUI (right-click menus). The same command
+// classes are auto-discovered for the CLI (`rdmp cmd <Name>`), so one definition serves both.
 
 using System.Collections.Generic;
 using Rdmp.Core;
@@ -19,7 +19,11 @@ public class CohortExportPluginUserInterface : PluginUserInterface
     public override IEnumerable<IAtomicCommand> GetAdditionalRightClickMenuItems(object o)
     {
         if (o is CohortIdentificationConfiguration cic)
+        {
             yield return new ExecuteCommandExportCohortAsScript(BasicActivator, cic);
+            // file + name unset -> the command prompts for them in the GUI
+            yield return new ExecuteCommandBuildCohortFromScript(BasicActivator, null);
+        }
 
         if (o is Catalogue cata)
             yield return new ExecuteCommandExportCatalogueManifest(BasicActivator, cata);

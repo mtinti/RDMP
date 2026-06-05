@@ -15,11 +15,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using Rdmp.Core.CommandExecution;
 using Rdmp.Core.Curation.Data;
 using YamlDotNet.Serialization;
 
-namespace RdmpCohortExport;
+namespace Rdmp.Core.CommandExecution.AtomicCommands;
 
 public class ExecuteCommandExportCatalogueManifest : BasicCommandExecution
 {

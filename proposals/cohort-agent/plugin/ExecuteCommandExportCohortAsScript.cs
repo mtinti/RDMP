@@ -1,40 +1,31 @@
-// RDMP plugin command: "decompile" a Cohort Identification Configuration (CIC) into the
-// data-free training triple used by the cohort-agent prototype:
-//   <out>/<cic>/requirement.md      (from CIC.Description)
-//   <out>/<cic>/build.script.yaml   (equivalent rdmp cmd script, reconstructed from the tree)
-//   <out>/<cic>/query.sql           (CohortQueryBuilder generated SQL)
+// Exports a Cohort Identification Configuration (CIC) as a data-free training triple:
+//   <out>/<cic>/requirement.md   <out>/<cic>/build.script.yaml   <out>/<cic>/query.sql
 //
-// Runs INSIDE the RDMP environment (UI right-click on a CIC, or CLI). Only the three small
-// text files it writes ever need to leave - no database/data export.
-//
-// CLI:  rdmp cmd ExportCohortAsScript CohortIdentificationConfiguration:5 ./export
-// UI:   right-click a CohortIdentificationConfiguration (see CohortExportPluginUserInterface)
-//
-// STATUS: first pass, authored against the RDMP API but NOT yet compiled/run (no metadata
-// available outside NHS). Build + smoke-test inside NHS and adjust as noted in README.md.
+// This is the verification copy of the cohort-export plugin command, placed in Rdmp.Core so
+// the CLI's MEF discovery exposes it as `rdmp cmd ExportCohortAsScript` for round-trip testing.
+// The shippable plugin (proposals/cohort-agent/plugin) carries the identical traversal logic.
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using Rdmp.Core.CommandExecution;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.QueryBuilding;
 
-namespace RdmpCohortExport;
+namespace Rdmp.Core.CommandExecution.AtomicCommands;
 
 public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 {
     private readonly CohortIdentificationConfiguration _cic;
     private readonly DirectoryInfo _outDir;
 
-    // The activator + a CIC: RDMP's CLI resolves `CohortIdentificationConfiguration:5`
-    // and the UI passes the right-clicked object into this constructor.
     public ExecuteCommandExportCohortAsScript(IBasicActivateItems activator,
+        [DemandsInitialization("The cohort to export")]
         CohortIdentificationConfiguration cic,
+        [DemandsInitialization("Folder to write the export into")]
         DirectoryInfo toDir = null) : base(activator)
     {
         _cic = cic;
@@ -51,22 +42,22 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         var dir = new DirectoryInfo(Path.Combine(_outDir.FullName, Sanitise(_cic.Name)));
         dir.Create();
 
-        // 1) requirement.md - an intentionally-empty placeholder. The natural-language
-        //    requirement is pasted in by hand later (from the request form); it is NOT taken
-        //    from CIC.Description (which may be unrelated). Never overwrite an already-filled
-        //    requirement, so re-exporting only refreshes the script + SQL.
+        // requirement.md is an intentionally-empty placeholder. The natural-language
+        // requirement is added by hand later (extracted from the request form) - it is NOT
+        // taken from CIC.Description, which may be unrelated. Never overwrite a requirement
+        // that has already been filled in, so re-exporting is safe.
         var reqPath = Path.Combine(dir.FullName, "requirement.md");
         if (!File.Exists(reqPath))
             File.WriteAllText(reqPath, $"<!-- Paste the natural-language requirement for '{_cic.Name}' here. -->\n");
 
-        // 2) build.script.yaml - reconstruct the equivalent rdmp cmd script from the tree
         File.WriteAllText(Path.Combine(dir.FullName, "build.script.yaml"), BuildScript());
 
-        // 3) query.sql - the SQL RDMP generates (uses the cohort's QueryCache if configured)
+        // query.sql: the SQL as RDMP would run it - this uses the cohort's QueryCache if one
+        // is configured (so it references cache tables). SQL generation is best-effort.
         File.WriteAllText(Path.Combine(dir.FullName, "query.sql"), BuildSql(useCache: true));
 
-        // 3b) query.uncached.sql - full query against the raw tables (cache bypassed). Only
-        //     written when a cache is configured; otherwise query.sql is already un-cached.
+        // query.uncached.sql: the full query against the raw tables, cache bypassed. Only emitted
+        // when a cache is configured (otherwise query.sql is already the un-cached query).
         if (_cic.QueryCachingServer_ID.HasValue)
             File.WriteAllText(Path.Combine(dir.FullName, "query.uncached.sql"), BuildSql(useCache: false));
 
@@ -90,14 +81,18 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
     private string BuildScript()
     {
+        var root = _cic.RootCohortAggregateContainer;
+
+        // ' => $handle' declares the handle bound to the object a creating command produces, so
+        // the runner (BuildCohortFromScript) can re-bind it to the real id it gets at build time.
         var lines = new List<string>
         {
             $"# Decompiled from CohortIdentificationConfiguration ID {_cic.ID}",
             "Commands:",
-            $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\"",
+            root != null
+                ? $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\" => {ContainerRef(root)}"
+                : $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\"",
         };
-
-        var root = _cic.RootCohortAggregateContainer;
 
         // Cohort-level (global) parameters. Per-filter parameters are emitted inline as Set
         // commands right after each filter (see EmitFilters).
@@ -130,63 +125,60 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
     // Containers and aggregates are referenced by stable handles ($c<id> / $a<id>) rather than
     // by name: names are not guaranteed unique or meaningful (an unnamed sub-container reports
     // its operation as its name). The trailing comment keeps the script human-readable.
-    // VERIFIED: round-trips a built cohort (see proposals/cohort-agent/plugin/README.md).
     private static string ContainerRef(CohortAggregateContainer c) => $"$c{c.ID}";
     private static string AggregateRef(AggregateConfiguration a) => $"$a{a.ID}";
 
-    // Walks a CohortAggregateContainer: its set operation, its cohort-set aggregates and
-    // any nested sub-containers, in display order.
     private void EmitContainer(CohortAggregateContainer container, List<string> lines)
     {
         var cref = ContainerRef(container);
         lines.Add($"  - SetContainerOperation CohortAggregateContainer:{cref} {container.Operation}   # {container.Name}");
 
         foreach (var content in container.GetOrderedContents())
-        {
             switch (content)
             {
                 case AggregateConfiguration agg:
                     EmitAggregate(agg, cref, lines);
                     break;
                 case CohortAggregateContainer sub:
-                    lines.Add($"  - AddCohortSubContainer CohortAggregateContainer:{cref}");
+                    lines.Add($"  - AddCohortSubContainer CohortAggregateContainer:{cref} => {ContainerRef(sub)}");
                     EmitContainer(sub, lines);
                     break;
             }
-        }
     }
 
-    // A "cohort set": one Catalogue added to the container, its identifier dimension, its filters.
     private void EmitAggregate(AggregateConfiguration agg, string containerRef, List<string> lines)
     {
         var cata = agg.Catalogue;
         var cataRef = cata != null ? Quote(cata.Name) : "<unknown-catalogue>";
         lines.Add(
-            $"  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:{containerRef} Catalogue:{cataRef}   # creates {AggregateRef(agg)}");
+            $"  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:{containerRef} Catalogue:{cataRef} => {AggregateRef(agg)}");
 
-        // The identifier dimension is auto-set when the catalogue is added; record it for clarity.
         foreach (var dim in agg.AggregateDimensions)
-            lines.Add($"  # dimension: {dim.GetRuntimeName()}   (auto-set; SetAggregateDimension only if overriding)");
+            lines.Add($"  # dimension: {dim.GetRuntimeName()}   (auto-set when catalogue added)");
 
         if (agg.RootFilterContainer is { } fc)
             EmitFilters(fc, AggregateRef(agg), lines);
     }
 
-    // Walks an AggregateFilterContainer (AND/OR) and its filters/sub-containers.
-    // hostRef is the aggregate (or filter sub-container) the filters attach to.
     private void EmitFilters(IContainer fc, string hostRef, List<string> lines)
     {
         foreach (var filter in fc.GetFilters())
         {
+            // ' => $pN ...' binds the parameter(s) the filter creation produces, so the following
+            // Set commands can re-reference them at build time.
+            var pbinds = string.Join(" ",
+                filter.GetAllParameters().OfType<AggregateFilterParameter>().Select(p => $"$p{p.ID}"));
+            var binds = string.IsNullOrEmpty(pbinds) ? "" : $" => {pbinds}";
+
             // If the filter was imported from a published (Catalogue) ExtractionFilter, re-import it
             // BY REFERENCE: this re-creates the WHERE SQL AND its parameters (with values) automatically.
             // Otherwise it's a hand-written filter, emitted with its literal WHERE SQL.
             if (filter is AggregateFilter { ClonedFromExtractionFilter_ID: { } efid })
                 lines.Add(
-                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} ExtractionFilter:{efid}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
+                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} ExtractionFilter:{efid}{binds}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
             else
                 lines.Add(
-                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"");
+                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"{binds}");
 
             // Set each parameter value explicitly so the script reproduces the cohort exactly
             // (the import above brings the template defaults; these lines pin the actual values).
@@ -198,8 +190,7 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
         var subs = fc.GetSubContainers();
         if (subs.Length > 0)
-            lines.Add(
-                $"  # nested filter group(s) under operation {fc.Operation}: build via AddNewFilterContainer then SetContainerOperation");
+            lines.Add($"  # nested filter group(s) under operation {fc.Operation}: AddNewFilterContainer + SetContainerOperation");
         foreach (var sub in subs)
             EmitFilters(sub, hostRef, lines);
     }
