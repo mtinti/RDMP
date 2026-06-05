@@ -89,9 +89,9 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
         var root = _cic.RootCohortAggregateContainer;
 
-        // SQL parameters (e.g. @indexDate) declared globally or carried by the cohort's filters.
-        // RDMP hoists these to the top of the generated SQL; capture them so the script is complete.
-        EmitParameters(root, lines);
+        // Cohort-level (global) parameters. Per-filter parameters are emitted inline as Set
+        // commands right after each filter (see EmitFilters).
+        EmitGlobalParameters(lines);
 
         if (root != null)
             EmitContainer(root, lines);
@@ -101,52 +101,20 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         return string.Join("\n", lines) + "\n";
     }
 
-    private void EmitParameters(CohortAggregateContainer root, List<string> lines)
+    private void EmitGlobalParameters(List<string> lines)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var collected = new List<ISqlParameter>();
-
-        void Collect(IEnumerable<ISqlParameter> ps)
-        {
-            foreach (var p in ps ?? Array.Empty<ISqlParameter>())
-                if (!string.IsNullOrWhiteSpace(p?.ParameterName) && seen.Add(p.ParameterName))
-                    collected.Add(p);
-        }
-
-        Collect(_cic.GetAllParameters());        // global parameters
-        if (root != null)
-            foreach (var f in AllFilters(root))
-                Collect(f.GetAllParameters());    // parameters carried by each filter
-
-        if (collected.Count == 0)
+        // Only cohort-level (global) parameters. Filter parameters are emitted inline as Set
+        // commands after each filter, so they are not duplicated here.
+        var globals = _cic.GetAllParameters();
+        if (globals.Length == 0)
             return;
 
-        lines.Add("  # --- SQL parameters used by this cohort (declared globally / by filters) ---");
-        foreach (var p in collected)
+        lines.Add("  # --- global (cohort-level) SQL parameters ---");
+        foreach (var p in globals)
         {
             var comment = string.IsNullOrWhiteSpace(p.Comment) ? "" : $"   /* {OneLine(p.Comment)} */";
             lines.Add($"  #   {OneLine(p.ParameterSQL)}   SET {p.ParameterName} = {OneLine(p.Value)}{comment}");
         }
-    }
-
-    private static IEnumerable<IFilter> AllFilters(CohortAggregateContainer container)
-    {
-        foreach (var agg in container.GetAggregateConfigurations())
-            if (agg.RootFilterContainer is { } fc)
-                foreach (var f in FiltersIn(fc))
-                    yield return f;
-        foreach (var sub in container.GetSubContainers())
-            foreach (var f in AllFilters(sub))
-                yield return f;
-    }
-
-    private static IEnumerable<IFilter> FiltersIn(IContainer fc)
-    {
-        foreach (var f in fc.GetFilters())
-            yield return f;
-        foreach (var sub in fc.GetSubContainers())
-            foreach (var f in FiltersIn(sub))
-                yield return f;
     }
 
     // Containers and aggregates are referenced by stable handles ($c<id> / $a<id>) rather than
@@ -190,6 +158,7 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
     private void EmitFilters(IContainer fc, string hostRef, List<string> lines)
     {
         foreach (var filter in fc.GetFilters())
+        {
             // If the filter was imported from a published (Catalogue) ExtractionFilter, re-import it
             // BY REFERENCE: this re-creates the WHERE SQL AND its parameters (with values) automatically.
             // Otherwise it's a hand-written filter, emitted with its literal WHERE SQL.
@@ -199,6 +168,14 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
             else
                 lines.Add(
                     $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"");
+
+            // Set each parameter value explicitly so the script reproduces the cohort exactly
+            // (the import above brings the template defaults; these lines pin the actual values).
+            foreach (var p in filter.GetAllParameters())
+                if (p is AggregateFilterParameter afp)
+                    lines.Add(
+                        $"  - Set AggregateFilterParameter:$p{afp.ID} Value \"{OneLine(afp.Value)}\"   # {afp.ParameterName}  ({OneLine(afp.ParameterSQL)})");
+        }
 
         var subs = fc.GetSubContainers();
         if (subs.Length > 0)
