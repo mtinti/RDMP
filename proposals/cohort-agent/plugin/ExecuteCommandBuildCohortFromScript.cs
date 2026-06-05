@@ -16,6 +16,7 @@ using Rdmp.Core.CommandLine.Interactive.Picking;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 using Rdmp.Core.Curation.Data.Cohort;
+using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.MapsDirectlyToDatabaseTable;
 using Rdmp.Core.Repositories;
 using YamlDotNet.Serialization;
@@ -27,6 +28,7 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
     private readonly FileInfo _scriptFile;
     private readonly string _newName;
     private readonly Dictionary<string, int> _handles = new(); // "$c25" -> real id
+    private CohortIdentificationConfiguration _currentCic;
 
     public ExecuteCommandBuildCohortFromScript(IBasicActivateItems activator,
         [DemandsInitialization("The build.script.yaml produced by ExportCohortAsScript")]
@@ -83,6 +85,16 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
 
                 line = Substitute(line);
 
+                // runner directive: associate the new CIC with a Project (so project-specific
+                // catalogues can be added). Handled directly, not via a command.
+                if (line.StartsWith("AssociateWithProject", StringComparison.OrdinalIgnoreCase))
+                {
+                    var pid = int.Parse(line[(line.IndexOf("Project:", StringComparison.Ordinal) + 8)..].Trim());
+                    var dx = BasicActivator.RepositoryLocator.DataExportRepository;
+                    _ = new ProjectCohortIdentificationConfigurationAssociation(dx, dx.GetObjectByID<Project>(pid), _currentCic);
+                    continue;
+                }
+
                 var tokens = Tokenize(line);
                 if (!byName.TryGetValue(tokens[0], out var type))
                     throw new Exception($"Unknown command '{tokens[0]}'");
@@ -108,6 +120,7 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
             case "CreateNewCohortIdentificationConfiguration":
                 var cic = (CohortIdentificationConfiguration)NewObjectPool.Latest(
                     repo.GetAllObjects<CohortIdentificationConfiguration>());
+                _currentCic = cic;
                 var root = cic.RootCohortAggregateContainer;
                 if (binds != null && root != null) _handles[binds] = root.ID;
                 // remove the auto Inclusion/Exclusion containers (the script recreates what it needs)

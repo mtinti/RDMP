@@ -13,6 +13,7 @@ using System.Text;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 using Rdmp.Core.Curation.Data.Cohort;
+using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.QueryBuilding;
 
 namespace Rdmp.Core.CommandExecution.AtomicCommands;
@@ -93,6 +94,14 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
                 ? $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\" => {ContainerRef(root)}"
                 : $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\"",
         };
+
+        // If this cohort is tied to a Project (required to use project-specific catalogues),
+        // record it so the rebuilt cohort joins the same Project BEFORE its catalogues are added.
+        var assoc = BasicActivator.RepositoryLocator.DataExportRepository
+            .GetAllObjectsWhere<ProjectCohortIdentificationConfigurationAssociation>(
+                "CohortIdentificationConfiguration_ID", _cic.ID).FirstOrDefault();
+        if (assoc != null)
+            lines.Add($"  - AssociateWithProject Project:{assoc.Project_ID}");
 
         // Cohort-level (global) parameters. Per-filter parameters are emitted inline as Set
         // commands right after each filter (see EmitFilters).
