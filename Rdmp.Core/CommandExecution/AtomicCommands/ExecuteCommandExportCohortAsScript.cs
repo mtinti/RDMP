@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
@@ -80,14 +81,18 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
     private string BuildScript()
     {
+        var root = _cic.RootCohortAggregateContainer;
+
+        // ' => $handle' declares the handle bound to the object a creating command produces, so
+        // the runner (BuildCohortFromScript) can re-bind it to the real id it gets at build time.
         var lines = new List<string>
         {
             $"# Decompiled from CohortIdentificationConfiguration ID {_cic.ID}",
             "Commands:",
-            $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\"",
+            root != null
+                ? $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\" => {ContainerRef(root)}"
+                : $"  - CreateNewCohortIdentificationConfiguration \"{_cic.Name}\"",
         };
-
-        var root = _cic.RootCohortAggregateContainer;
 
         // Cohort-level (global) parameters. Per-filter parameters are emitted inline as Set
         // commands right after each filter (see EmitFilters).
@@ -135,7 +140,7 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
                     EmitAggregate(agg, cref, lines);
                     break;
                 case CohortAggregateContainer sub:
-                    lines.Add($"  - AddCohortSubContainer CohortAggregateContainer:{cref}");
+                    lines.Add($"  - AddCohortSubContainer CohortAggregateContainer:{cref} => {ContainerRef(sub)}");
                     EmitContainer(sub, lines);
                     break;
             }
@@ -146,7 +151,7 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         var cata = agg.Catalogue;
         var cataRef = cata != null ? Quote(cata.Name) : "<unknown-catalogue>";
         lines.Add(
-            $"  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:{containerRef} Catalogue:{cataRef}   # creates {AggregateRef(agg)}");
+            $"  - AddCatalogueToCohortIdentificationSetContainer CohortAggregateContainer:{containerRef} Catalogue:{cataRef} => {AggregateRef(agg)}");
 
         foreach (var dim in agg.AggregateDimensions)
             lines.Add($"  # dimension: {dim.GetRuntimeName()}   (auto-set when catalogue added)");
@@ -159,15 +164,21 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
     {
         foreach (var filter in fc.GetFilters())
         {
+            // ' => $pN ...' binds the parameter(s) the filter creation produces, so the following
+            // Set commands can re-reference them at build time.
+            var pbinds = string.Join(" ",
+                filter.GetAllParameters().OfType<AggregateFilterParameter>().Select(p => $"$p{p.ID}"));
+            var binds = string.IsNullOrEmpty(pbinds) ? "" : $" => {pbinds}";
+
             // If the filter was imported from a published (Catalogue) ExtractionFilter, re-import it
             // BY REFERENCE: this re-creates the WHERE SQL AND its parameters (with values) automatically.
             // Otherwise it's a hand-written filter, emitted with its literal WHERE SQL.
             if (filter is AggregateFilter { ClonedFromExtractionFilter_ID: { } efid })
                 lines.Add(
-                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} ExtractionFilter:{efid}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
+                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} ExtractionFilter:{efid}{binds}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
             else
                 lines.Add(
-                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"");
+                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"{binds}");
 
             // Set each parameter value explicitly so the script reproduces the cohort exactly
             // (the import above brings the template defaults; these lines pin the actual values).
