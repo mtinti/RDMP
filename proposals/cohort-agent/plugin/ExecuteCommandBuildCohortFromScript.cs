@@ -95,6 +95,16 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
                     continue;
                 }
 
+                // runner directive: aggregate-level parameter.
+                // AddAggregateParameter <aggId> "name" "DECLARE @x AS type" "value"
+                if (line.StartsWith("AddAggregateParameter", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line); // [cmd, aggId, name, parameterSQL, value]
+                    var agg = repo.GetObjectByID<AggregateConfiguration>(int.Parse(t[1]));
+                    new AnyTableSqlParameter(repo, agg, t[3]) { Value = t[4] }.SaveToDatabase();
+                    continue;
+                }
+
                 var tokens = Tokenize(line);
                 if (!byName.TryGetValue(tokens[0], out var type))
                     throw new Exception($"Unknown command '{tokens[0]}'");

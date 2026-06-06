@@ -165,6 +165,15 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         foreach (var dim in agg.AggregateDimensions)
             lines.Add($"  # dimension: {dim.GetRuntimeName()}   (auto-set when catalogue added)");
 
+        // aggregate-level parameters (e.g. @window) - distinct from filter parameters.
+        // Query directly (agg.Parameters also filters on repository-type, which can miss).
+        // Emitted as a directive the runner creates directly (AnyTableSqlParameter on the aggregate).
+        foreach (var ap in BasicActivator.RepositoryLocator.CatalogueRepository
+                     .GetAllObjects<AnyTableSqlParameter>()
+                     .Where(p => p.ReferencedObjectType == nameof(AggregateConfiguration) && p.ReferencedObjectID == agg.ID))
+            lines.Add(
+                $"  - AddAggregateParameter {AggregateRef(agg)} \"{ap.ParameterName}\" \"{OneLine(ap.ParameterSQL)}\" \"{OneLine(ap.Value)}\"");
+
         if (agg.RootFilterContainer is { } fc)
             EmitFilters(fc, AggregateRef(agg), lines);
     }
