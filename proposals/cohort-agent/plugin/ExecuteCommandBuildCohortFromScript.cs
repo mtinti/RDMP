@@ -12,10 +12,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Rdmp.Core.CommandExecution.Combining;
 using Rdmp.Core.CommandLine.Interactive.Picking;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 using Rdmp.Core.Curation.Data.Cohort;
+using Rdmp.Core.Curation.Data.Cohort.Joinables;
 using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.MapsDirectlyToDatabaseTable;
 using Rdmp.Core.Repositories;
@@ -28,6 +30,7 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
     private readonly FileInfo _scriptFile;
     private readonly string _newName;
     private readonly Dictionary<string, int> _handles = new(); // "$c25" -> real id
+    private readonly Dictionary<int, int> _ixMap = new();      // old joinable id -> new (for ix#### alias)
     private CohortIdentificationConfiguration _currentCic;
 
     public ExecuteCommandBuildCohortFromScript(IBasicActivateItems activator,
@@ -84,6 +87,67 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
                     line = $"CreateNewCohortIdentificationConfiguration \"{newName}\"";
 
                 line = Substitute(line);
+
+                // rewrite patient-index-table aliases ix<oldJoinableId> -> ix<newJoinableId>
+                // (the join alias is instance-specific; the PIT was created earlier this run).
+                foreach (var kv in _ixMap)
+                    line = line.Replace($"ix{kv.Key}.", $"ix{kv.Value}.");
+
+                // runner directive: create a patient index table (joinable) from a catalogue, with
+                // the given non-identifier dimensions, then convert it to a PIT.
+                // CreatePatientIndexTable Catalogue:<name> Dimensions:"col1,col2" => $pit<oldJoinableId>
+                if (line.StartsWith("CreatePatientIndexTable", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line); // CreatePatientIndexTable Catalogue:<n> Aggregate:<oldAggId> Dimensions:"a,b"
+                    var cataName = Field(t, "Catalogue:");
+                    var oldAggId = Field(t, "Aggregate:");
+                    var dimCols = Field(t, "Dimensions:").Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    var cata = repo.GetAllObjects<Catalogue>().First(c => c.Name == cataName);
+
+                    var aggCmd = new CatalogueCombineable(cata).GenerateAggregateConfigurationFor(BasicActivator, _currentCic);
+                    foreach (var col in dimCols)
+                    {
+                        var ei = cata.GetAllExtractionInformation().FirstOrDefault(e => e.GetRuntimeName() == col);
+                        if (ei != null) _ = new AggregateDimension(repo, ei, aggCmd.Aggregate);
+                    }
+                    // bind the PIT aggregate's $a<oldId> so later SetDimensionSql overrides can target it
+                    if (oldAggId != null) _handles[$"$a{oldAggId}"] = aggCmd.Aggregate.ID;
+                    new ExecuteCommandConvertAggregateConfigurationToPatientIndexTable(BasicActivator, aggCmd, _currentCic).Execute();
+
+                    var joinable = (JoinableCohortAggregateConfiguration)NewObjectPool.Latest(
+                        repo.GetAllObjects<JoinableCohortAggregateConfiguration>());
+                    if (binds != null)
+                    {
+                        _handles[binds] = joinable.ID;             // $pit<old> -> new joinable id
+                        _ixMap[int.Parse(binds[4..])] = joinable.ID; // old id (after "$pit") -> new
+                    }
+                    continue;
+                }
+
+                // runner directive: restore a dimension's customised SelectSQL (e.g. the extraction
+                // identifier qualified to [db]..[tbl].[col] so a PIT join's chi isn't ambiguous).
+                // SetDimensionSql <aggId> "<runtimeName>" "<selectSql>"
+                if (line.StartsWith("SetDimensionSql", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line);
+                    var agg = repo.GetObjectByID<AggregateConfiguration>(int.Parse(t[1]));
+                    var dim = agg.AggregateDimensions.FirstOrDefault(d => d.GetRuntimeName() == t[2]);
+                    if (dim != null) { dim.SelectSQL = t[3]; dim.SaveToDatabase(); }
+                    continue;
+                }
+
+                // runner directive: make a cohort set join to a patient index table.
+                // UsePatientIndexTable <setAggId> <joinableId> <JoinType>
+                if (line.StartsWith("UsePatientIndexTable", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line);
+                    var setAgg = repo.GetObjectByID<AggregateConfiguration>(int.Parse(t[1]));
+                    var joinable = repo.GetObjectByID<JoinableCohortAggregateConfiguration>(int.Parse(t[2]));
+                    var use = joinable.AddUser(setAgg);
+                    use.JoinType = Enum.Parse<ExtractionJoinType>(t[3], true);
+                    use.SaveToDatabase();
+                    continue;
+                }
 
                 // runner directive: associate the new CIC with a Project (so project-specific
                 // catalogues can be added). Handled directly, not via a command.
@@ -242,6 +306,13 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
         var e = s;
         while (e < line.Length && char.IsDigit(line[e])) e++;
         return int.TryParse(line[s..e], out var id) ? id : -1;
+    }
+
+    // value of a "Key:value" token (quotes already stripped by Tokenize), or null if absent
+    private static string Field(List<string> tokens, string key)
+    {
+        var tok = tokens.FirstOrDefault(x => x.StartsWith(key, StringComparison.OrdinalIgnoreCase));
+        return tok?[key.Length..];
     }
 
     // split on spaces, honouring double quotes anywhere in a token; quote chars are dropped

@@ -103,6 +103,21 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         if (assoc != null)
             lines.Add($"  - AssociateWithProject Project:{assoc.Project_ID}");
 
+        // Patient-index tables (joinables) must exist BEFORE the cohort sets that join to them.
+        // The runner creates each as $pit<oldJoinableId> and rewrites the ix<oldId> filter alias.
+        foreach (var j in _cic.GetAllJoinables())
+        {
+            var pitAgg = j.AggregateConfiguration;
+            var dims = pitAgg.AggregateDimensions
+                .Where(d => d.ExtractionInformation is not { IsExtractionIdentifier: true })
+                .Select(d => d.GetRuntimeName());
+            // Aggregate:<oldId> lets the runner bind the rebuilt PIT aggregate to $a<oldId> so the
+            // dimension-SQL overrides below (which restore e.g. the qualified chi) can target it.
+            lines.Add(
+                $"  - CreatePatientIndexTable Catalogue:{Quote(pitAgg.Catalogue.Name)} Aggregate:{pitAgg.ID} Dimensions:\"{string.Join(",", dims)}\" => $pit{j.ID}");
+            EmitDimensionOverrides(pitAgg, AggregateRef(pitAgg), lines);
+        }
+
         // Cohort-level (global) parameters. Per-filter parameters are emitted inline as Set
         // commands right after each filter (see EmitFilters).
         EmitGlobalParameters(lines);
@@ -165,6 +180,15 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         foreach (var dim in agg.AggregateDimensions)
             lines.Add($"  # dimension: {dim.GetRuntimeName()}   (auto-set when catalogue added)");
 
+        // Restore any dimension whose SelectSQL was customised away from the catalogue default
+        // (e.g. the extraction identifier qualified to [db]..[tbl].[col] so a PIT join isn't ambiguous).
+        EmitDimensionOverrides(agg, AggregateRef(agg), lines);
+
+        // join-uses: this cohort set joins to a patient-index table ($pit<id>) created earlier.
+        foreach (var use in agg.PatientIndexJoinablesUsed)
+            lines.Add(
+                $"  - UsePatientIndexTable {AggregateRef(agg)} $pit{use.JoinableCohortAggregateConfiguration_ID} {use.JoinType}");
+
         // aggregate-level parameters (e.g. @window) - distinct from filter parameters.
         // Query directly (agg.Parameters also filters on repository-type, which can miss).
         // Emitted as a directive the runner creates directly (AnyTableSqlParameter on the aggregate).
@@ -176,6 +200,19 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
         if (agg.RootFilterContainer is { } fc)
             EmitFilters(fc, AggregateRef(agg), lines);
+    }
+
+    // Emits a SetDimensionSql directive for every dimension whose SelectSQL was customised away
+    // from its catalogue ExtractionInformation default. Real (qualified) catalogues usually match,
+    // so nothing is emitted; NewObject/test catalogues that were hand-qualified emit the override.
+    private void EmitDimensionOverrides(AggregateConfiguration agg, string aggRef, List<string> lines)
+    {
+        foreach (var dim in agg.AggregateDimensions)
+        {
+            var eiSql = dim.ExtractionInformation?.SelectSQL;
+            if (!string.IsNullOrWhiteSpace(dim.SelectSQL) && dim.SelectSQL != eiSql)
+                lines.Add($"  - SetDimensionSql {aggRef} \"{dim.GetRuntimeName()}\" \"{OneLine(dim.SelectSQL)}\"");
+        }
     }
 
     private void EmitFilters(IContainer rootFc, string aggRef, List<string> lines)
