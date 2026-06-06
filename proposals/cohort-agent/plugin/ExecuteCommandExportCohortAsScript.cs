@@ -178,39 +178,43 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
             EmitFilters(fc, AggregateRef(agg), lines);
     }
 
-    private void EmitFilters(IContainer fc, string hostRef, List<string> lines)
+    private void EmitFilters(IContainer rootFc, string aggRef, List<string> lines)
+    {
+        // Build the aggregate's root filter container with the right AND/OR operation, then fill it.
+        // (Directives the runner handles directly; the CLI AddNewFilterContainer misbehaves headless.)
+        var key = $"fc{((AggregateFilterContainer)rootFc).ID}";
+        lines.Add($"  - EnsureFilterContainer {aggRef} {rootFc.Operation} => ${key}");
+        EmitContainerFilters(rootFc, key, lines);
+    }
+
+    // fcKey (no leading $) is the handle of the container the filters/sub-containers go INTO.
+    private void EmitContainerFilters(IContainer fc, string fcKey, List<string> lines)
     {
         foreach (var filter in fc.GetFilters())
         {
-            // ' => $pN ...' binds the parameter(s) the filter creation produces, so the following
-            // Set commands can re-reference them at build time.
             var pbinds = string.Join(" ",
                 filter.GetAllParameters().OfType<AggregateFilterParameter>().Select(p => $"$p{p.ID}"));
             var binds = string.IsNullOrEmpty(pbinds) ? "" : $" => {pbinds}";
 
-            // If the filter was imported from a published (Catalogue) ExtractionFilter, re-import it
-            // BY REFERENCE: this re-creates the WHERE SQL AND its parameters (with values) automatically.
-            // Otherwise it's a hand-written filter, emitted with its literal WHERE SQL.
             if (filter is AggregateFilter { ClonedFromExtractionFilter_ID: { } efid })
                 lines.Add(
-                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} ExtractionFilter:{efid}{binds}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
+                    $"  - CreateNewFilter AggregateFilterContainer:${fcKey} ExtractionFilter:{efid}{binds}   # \"{filter.Name}\": {OneLine(filter.WhereSQL)}");
             else
                 lines.Add(
-                    $"  - CreateNewFilter AggregateConfiguration:{hostRef} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"{binds}");
+                    $"  - CreateNewFilter AggregateFilterContainer:${fcKey} \"{filter.Name}\" \"{OneLine(filter.WhereSQL)}\"{binds}");
 
-            // Set each parameter value explicitly so the script reproduces the cohort exactly
-            // (the import above brings the template defaults; these lines pin the actual values).
             foreach (var p in filter.GetAllParameters())
                 if (p is AggregateFilterParameter afp)
                     lines.Add(
                         $"  - Set AggregateFilterParameter:$p{afp.ID} Value \"{OneLine(afp.Value)}\"   # {afp.ParameterName}  ({OneLine(afp.ParameterSQL)})");
         }
 
-        var subs = fc.GetSubContainers();
-        if (subs.Length > 0)
-            lines.Add($"  # nested filter group(s) under operation {fc.Operation}: AddNewFilterContainer + SetContainerOperation");
-        foreach (var sub in subs)
-            EmitFilters(sub, hostRef, lines);
+        foreach (var sub in fc.GetSubContainers())
+        {
+            var subKey = $"fc{((AggregateFilterContainer)sub).ID}";
+            lines.Add($"  - AddFilterSubContainer ${fcKey} {sub.Operation} => ${subKey}");
+            EmitContainerFilters(sub, subKey, lines);
+        }
     }
 
     private static string Quote(string name) => $"\"{name}\"";

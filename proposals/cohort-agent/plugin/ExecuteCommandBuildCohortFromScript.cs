@@ -95,6 +95,17 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
                     continue;
                 }
 
+                // SetContainerOperation on a NAMED cohort container (Root/Inclusion/Exclusion)
+                // prompts for a rename and fails headless - set it directly instead.
+                if (line.StartsWith("SetContainerOperation CohortAggregateContainer:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line);
+                    var cont = repo.GetObjectByID<CohortAggregateContainer>(int.Parse(t[1][(t[1].IndexOf(':') + 1)..]));
+                    cont.Operation = Enum.Parse<SetOperation>(t[2], true);
+                    cont.SaveToDatabase();
+                    continue;
+                }
+
                 // runner directive: aggregate-level parameter.
                 // AddAggregateParameter <aggId> "name" "DECLARE @x AS type" "value"
                 if (line.StartsWith("AddAggregateParameter", StringComparison.OrdinalIgnoreCase))
@@ -102,6 +113,37 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
                     var t = Tokenize(line); // [cmd, aggId, name, parameterSQL, value]
                     var agg = repo.GetObjectByID<AggregateConfiguration>(int.Parse(t[1]));
                     new AnyTableSqlParameter(repo, agg, t[3]) { Value = t[4] }.SaveToDatabase();
+                    continue;
+                }
+
+                // runner directive: make the aggregate's root filter container with an AND/OR op.
+                // EnsureFilterContainer <aggId> <AND|OR> => $fcN
+                if (line.StartsWith("EnsureFilterContainer", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line);
+                    var agg = repo.GetObjectByID<AggregateConfiguration>(int.Parse(t[1]));
+                    int fcid;
+                    if (agg.RootFilterContainer_ID == null)
+                    {
+                        var nfc = new AggregateFilterContainer(repo, Enum.Parse<FilterContainerOperation>(t[2], true));
+                        agg.RootFilterContainer_ID = nfc.ID;
+                        agg.SaveToDatabase();
+                        fcid = nfc.ID;
+                    }
+                    else fcid = agg.RootFilterContainer_ID.Value;
+                    if (binds != null) _handles[binds] = fcid;
+                    continue;
+                }
+
+                // runner directive: add an AND/OR sub-container under a filter container.
+                // AddFilterSubContainer <parentFcId> <AND|OR> => $fcN
+                if (line.StartsWith("AddFilterSubContainer", StringComparison.OrdinalIgnoreCase))
+                {
+                    var t = Tokenize(line);
+                    var parent = repo.GetObjectByID<AggregateFilterContainer>(int.Parse(t[1]));
+                    var sub = new AggregateFilterContainer(repo, Enum.Parse<FilterContainerOperation>(t[2], true));
+                    parent.AddChild(sub);
+                    if (binds != null) _handles[binds] = sub.ID;
                     continue;
                 }
 
