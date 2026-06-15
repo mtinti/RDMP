@@ -64,6 +64,7 @@ public partial class CohortIdentificationConfigurationUI : CohortIdentificationC
     IRefreshBusSubscriber
 {
     private ToolStripMenuItem cbIncludeCumulative = new("Calculate Cumulative Totals") { CheckOnClick = true };
+    private ToolStripMenuItem miExportCounts = new("Export Counts to File...");
     private ToolTip tt = new();
 
     private readonly ToolStripTimeout _timeoutControls = new() { Timeout = 3000 };
@@ -107,6 +108,8 @@ public partial class CohortIdentificationConfigurationUI : CohortIdentificationC
         {
             Common.SetShowCumulativeTotals(cbIncludeCumulative.Checked);
         };
+
+        miExportCounts.Click += ExportCounts;
 
         //This is important, OrderableComparer ensures IOrderable objects appear in the correct order but the comparator
         //doesn't get called unless the column has a sorting on it
@@ -207,6 +210,7 @@ public partial class CohortIdentificationConfigurationUI : CohortIdentificationC
         }
 
         CommonFunctionality.AddToMenu(cbIncludeCumulative);
+        CommonFunctionality.AddToMenu(miExportCounts);
         CommonFunctionality.AddToMenu(new ToolStripSeparator());
         CommonFunctionality.AddToMenu(new ExecuteCommandSetQueryCachingDatabase(Activator, databaseObject));
         CommonFunctionality.AddToMenu(new ExecuteCommandClearQueryCache(Activator, databaseObject));
@@ -256,6 +260,28 @@ public partial class CohortIdentificationConfigurationUI : CohortIdentificationC
             _clearCacheCommand.IsImpossible
                 ? _clearCacheCommand.ReasonCommandImpossible
                 : "Clears any cached results (stale or otherwise) from the query cache");
+    }
+
+    private void ExportCounts(object sender, EventArgs e)
+    {
+        // Export the counts already computed in memory (what the user is looking at) rather than
+        // re-running the cohort. Snapshot the task list under lock to avoid racing a running build.
+        ICompileable[] tasks;
+        lock (Common.Compiler.Tasks)
+            tasks = Common.Compiler.Tasks.Keys.ToArray();
+
+        if (tasks.Length == 0)
+        {
+            Activator.Show("There are no counts to export yet - run the cohort first.");
+            return;
+        }
+
+        var file = Activator.SelectFile("Path to write cohort counts to", "Cohort counts", "*.csv");
+        if (file == null)
+            return;
+
+        CohortCountReport.WriteCsv(file.FullName, tasks);
+        Activator.Show($"Exported counts to {file.FullName}");
     }
 
     private void TlvCic_ItemActivate(object sender, EventArgs e)
