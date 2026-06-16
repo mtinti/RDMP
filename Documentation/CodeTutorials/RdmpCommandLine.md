@@ -125,6 +125,12 @@ recreates the cohort), `query.sql` (the SQL RDMP would run), `catalogue-manifest
 extractable columns, patient-identifier column(s) and published filters of just the catalogues
 this cohort uses) and a `requirement.md` placeholder.*
 
+If the cohort cannot be expressed as a single query - typically because its sets span multiple
+servers/credentials and no QueryCache is configured (RDMP cannot `UNION`/`INTERSECT`/`EXCEPT`
+across servers) - `query.sql` falls back to a *best-effort* document: each cohort set's SQL is
+emitted individually with the set-operation tree shown as comments, and a notes block at the end
+lists what could not be combined. Each per-set query is valid against its own server.
+
 Rebuild an identical cohort from that script:
 
 ```

@@ -295,6 +295,51 @@ internal class TestCohortScriptRoundTrip : UnitTests
     }
 
     /// <summary>
+    /// When the whole-cohort SQL cannot be generated (in-memory there is no real server, which is
+    /// the same failure a real cross-server cohort with no QueryCache hits), query.sql must fall
+    /// back to a best-effort document: a header, each cohort set listed, and a notes footer -
+    /// instead of losing everything to one "SQL generation failed" line.
+    /// </summary>
+    [Test]
+    public void Export_WhenFullSqlCannotBeGenerated_WritesBestEffortQuery()
+    {
+        var cata1 = MakeCohortCatalogue("BE_One", out var id1, out _);
+        var cata2 = MakeCohortCatalogue("BE_Two", out var id2, out _);
+
+        var cic = new CohortIdentificationConfiguration(Repository, "BestEffort CIC");
+        var root = new CohortAggregateContainer(Repository, SetOperation.UNION);
+        cic.RootCohortAggregateContainer_ID = root.ID;
+        cic.SaveToDatabase();
+
+        var s1 = new AggregateConfiguration(Repository, cata1, "People in One");
+        _ = new AggregateDimension(Repository, id1, s1);
+        cic.EnsureNamingConvention(s1);
+        root.AddChild(s1, 0);
+
+        var s2 = new AggregateConfiguration(Repository, cata2, "People in Two");
+        _ = new AggregateDimension(Repository, id2, s2);
+        cic.EnsureNamingConvention(s2);
+        root.AddChild(s2, 1);
+
+        var activator = (ConsoleInputManager)GetActivator();
+        activator.DisallowInput = true;
+        var outDir = new DirectoryInfo(Path.Join(Path.GetTempPath(), "rdmp-besteffort-" + System.Guid.NewGuid()));
+        new ExecuteCommandExportCohortAsScript(activator, cic, outDir).Execute();
+
+        var sql = File.ReadAllText(Path.Join(outDir.FullName, "BestEffort CIC", "query.sql"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(sql, Does.Contain("BEST-EFFORT"), "should fall back to a best-effort document");
+            Assert.That(sql, Does.Contain("People in One"), "each cohort set should be listed");
+            Assert.That(sql, Does.Contain("People in Two"));
+            Assert.That(sql, Does.Contain("UNION"), "the set operation joining the sets should be shown");
+            Assert.That(sql, Does.Contain("COULD NOT BE CONVERTED"), "should end with the could-not-convert notes");
+        });
+
+        outDir.Delete(true);
+    }
+
+    /// <summary>
     /// A catalogue with a patient-identifier column (<paramref name="idEi"/>) and a date column
     /// (<paramref name="dateEi"/>), suitable for use as a cohort identification set.
     /// </summary>

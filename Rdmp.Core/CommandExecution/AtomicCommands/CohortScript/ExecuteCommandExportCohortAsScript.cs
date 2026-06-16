@@ -83,7 +83,122 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
         }
         catch (Exception e)
         {
-            return $"-- SQL generation failed: {e.Message}";
+            // The whole cohort could not be assembled into a single runnable statement - most often
+            // because its sets are on different servers / use different credentials and no QueryCache
+            // is configured (RDMP cannot UNION/INTERSECT/EXCEPT across servers). Rather than lose
+            // everything to one error line, emit each set's SQL individually plus notes on what could
+            // not be combined.
+            return BuildBestEffortSql(e);
+        }
+    }
+
+    // Best-effort SQL when the whole-cohort query cannot be generated: emit each cohort set's SQL
+    // (each set is single-server so it generates fine), mirror the set-operation tree as comments,
+    // and end with a notes block describing what could not be converted.
+    private string BuildBestEffortSql(Exception fullBuildError)
+    {
+        var lines = new List<string>();
+        var failures = new List<string>();
+        var servers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        lines.Add("-- ============================================================================");
+        lines.Add("-- BEST-EFFORT SQL");
+        lines.Add("-- The full cohort query could not be assembled into a single runnable statement:");
+        lines.Add($"--   {OneLine(fullBuildError.Message)}");
+        lines.Add("-- This usually means the cohort's sets are on different servers / use different");
+        lines.Add("-- credentials and no QueryCache is configured, so they cannot be combined in one");
+        lines.Add("-- query. Each cohort set's SQL is emitted individually below; to run the whole");
+        lines.Add("-- cohort configure a QueryCache on the CohortIdentificationConfiguration (or stage");
+        lines.Add("-- the per-set results and combine them with the set operations shown as comments).");
+        lines.Add("-- ============================================================================");
+        lines.Add("");
+
+        if (_cic.RootCohortAggregateContainer is { } root)
+            EmitBestEffortContainer(root, 0, lines, failures, servers);
+        else
+            lines.Add("-- (this cohort has no root container)");
+
+        lines.Add("");
+        lines.Add("-- ============================================================================");
+        lines.Add("-- COULD NOT BE CONVERTED TO A SINGLE SQL QUERY:");
+        if (servers.Count > 1)
+            lines.Add($"--   * The sets above span {servers.Count} server(s)/credential(s): {string.Join(", ", servers.OrderBy(s => s))}.");
+        lines.Add("--   * SQL Server cannot UNION/INTERSECT/EXCEPT across servers without a QueryCache");
+        lines.Add("--     (or linked servers). Apply the set operations shown as comments via a QueryCache");
+        lines.Add("--     or by combining the per-set results manually.");
+        foreach (var f in failures)
+            lines.Add($"--   * {f}");
+        lines.Add("-- ============================================================================");
+
+        return string.Join("\n", lines) + "\n";
+    }
+
+    private void EmitBestEffortContainer(CohortAggregateContainer container, int depth,
+        List<string> lines, List<string> failures, HashSet<string> servers)
+    {
+        var indent = new string(' ', depth * 2);
+        lines.Add($"{indent}/* container \"{container.Name}\"  [{container.Operation}] */");
+
+        var first = true;
+        foreach (var content in container.GetOrderedContents())
+        {
+            if (!first)
+                lines.Add($"{indent}-- {container.Operation}");
+            first = false;
+
+            switch (content)
+            {
+                case AggregateConfiguration agg:
+                    var server = ServerOf(agg);
+                    if (server != null) servers.Add(server);
+                    lines.Add($"{indent}/* set: \"{agg.Name}\"   (server: {server ?? "unknown"}) */");
+                    var sql = SingleSetSql(agg, out var err);
+                    if (err != null)
+                    {
+                        lines.Add($"{indent}-- (this set's SQL could not be generated: {OneLine(err)})");
+                        failures.Add($"Set \"{agg.Name}\" could not be generated: {OneLine(err)}");
+                    }
+                    else
+                    {
+                        foreach (var sqlLine in sql.Replace("\r", "").Split('\n'))
+                            lines.Add(indent + sqlLine.TrimEnd());
+                    }
+
+                    break;
+                case CohortAggregateContainer sub:
+                    EmitBestEffortContainer(sub, depth + 1, lines, failures, servers);
+                    break;
+            }
+        }
+    }
+
+    // A single cohort set is always on one server, so its SQL generates even when the whole cohort
+    // (which may span servers) cannot. Still guarded: a set could itself be cross-server (e.g. a
+    // patient index table join to another server).
+    private string SingleSetSql(AggregateConfiguration agg, out string error)
+    {
+        try
+        {
+            error = null;
+            return new CohortQueryBuilder(agg, _cic.GetAllParameters(), null).SQL ?? "";
+        }
+        catch (Exception e)
+        {
+            error = e.Message;
+            return "";
+        }
+    }
+
+    private static string ServerOf(AggregateConfiguration agg)
+    {
+        try
+        {
+            var ti = agg.Catalogue?.GetTableInfoList(false).FirstOrDefault();
+            return ti == null ? null : $"{ti.Server}/{ti.Database}";
+        }
+        catch
+        {
+            return null;
         }
     }
 
