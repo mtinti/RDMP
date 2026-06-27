@@ -171,7 +171,8 @@ notKnown = nationalTotal - sum(boards) - other;   <span class="c">// not in demo
 <h2>5. The output (build-tree plugin)</h2>
 <p>A wide CSV: one row per rule/container (name written once), a <b>Total</b> column (RDMP’s national
 number), a column per board, then Other and NotKnown, and a percentage row at the bottom. <code class="inl">Final</code>
-= that rule’s own count; <code class="inl">Cumulative</code> = the running cohort size after that step.</p>
+= that rule’s own count; <code class="inl">Cumulative</code> = the running cohort size after that step. The
+column header is <b>repeated just above the % row</b> so each percentage lines up under its board.</p>
 <pre>Name        Metric      Total  Fife  Tayside  Glasgow  Other  NotKnown
 Root        Final          58    12       29       17      0         0
 Inclusion   Final         100    20       50       30      0         0
@@ -180,7 +181,13 @@ Excl1       Cumulative     80    16       40       24      0         0
 Excl2       Cumulative     65    13       32       20      0         0
 Excl4       Cumulative     58    12       29       17      0         0
 
+Name        Metric      Total  Fife  Tayside  Glasgow  Other  NotKnown   <span class="c">&lt;- header repeated</span>
 % of final cohort         100.0  20.7     50.0     29.3    0.0       0.0</pre>
+<div class="callout do"><b>Clean names</b> — RDMP internally prefixes set names with <code class="inl">cic_&lt;id&gt;_</code>,
+and cloning a cohort across configurations stacks them (e.g.
+<code class="inl">cic_18286_cic_18284_cic_17950_People in SHARE…</code>). The report strips those prefixes for
+display, so you see the real name (<code class="inl">People in SHARE Current For Contact [Recruitment]</code>,
+<code class="inl">Excl Grp 1 and 2</code>).</div>
 
 <h2>6. The built-in correctness check</h2>
 <p>On every row, the board columns plus Other plus NotKnown must add back up to the Total — and the Total
