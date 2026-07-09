@@ -161,6 +161,11 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
                 Assert.That(w.Percent(T), Is.EqualTo("50.0"));
                 Assert.That(w.Percent(G), Is.EqualTo("29.3"));
                 Assert.That(w.Percent(F), Is.EqualTo("20.7"));
+
+                // % of demography row (BB_Demography = 100 people: T50 G30 F20) - the sanity-check reference
+                Assert.That(w.DemogPercent(T), Is.EqualTo("50.0"));
+                Assert.That(w.DemogPercent(G), Is.EqualTo("30.0"));
+                Assert.That(w.DemogPercent(F), Is.EqualTo("20.0"));
             });
 
             // ---- partition: every data row's columns after Total sum back to Total ----
@@ -203,6 +208,7 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
         private readonly Dictionary<string, int> _col;
         private readonly List<string[]> _data = new();
         private string[] _percent;
+        private string[] _demogPercent;
 
         public Wide(string csv)
         {
@@ -213,9 +219,11 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
             {
                 var c = line.Split(',');
                 if (c[0] == "Order")
-                    continue; // the header is repeated just above the percentage row
+                    continue; // the header is repeated just above the percentage rows
                 if (c[_col["Metric"]] == CohortBuildHealthBoardBreakdownReport.PercentMetric)
                     _percent = c;
+                else if (c[_col["Metric"]] == CohortBuildHealthBoardBreakdownReport.DemographyPercentMetric)
+                    _demogPercent = c;
                 else
                     _data.Add(c);
             }
@@ -239,6 +247,8 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
         }
 
         public string Percent(string column) => _percent[_col[column]];
+
+        public string DemogPercent(string column) => _demogPercent[_col[column]];
     }
 
     private static Wide ParseWide(string csv) => new(csv);
