@@ -352,4 +352,23 @@ public class CohortBuildHealthBoardBreakdownReportTests
             Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.CleanName(null), Is.EqualTo(""));
         });
     }
+
+    [Test]
+    public void SetOperationSql_MapsExceptToMinusOnOracle()
+    {
+        Assert.Multiple(() =>
+        {
+            // Oracle spells EXCEPT as MINUS; everything else is the ANSI keyword
+            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+                SetOperation.EXCEPT, DatabaseType.Oracle), Is.EqualTo("MINUS"));
+            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+                SetOperation.EXCEPT, DatabaseType.MicrosoftSQLServer), Is.EqualTo("EXCEPT"));
+            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+                SetOperation.EXCEPT, DatabaseType.PostgreSql), Is.EqualTo("EXCEPT"));
+            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+                SetOperation.UNION, DatabaseType.Oracle), Is.EqualTo("UNION"));
+            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+                SetOperation.INTERSECT, DatabaseType.Oracle), Is.EqualTo("INTERSECT"));
+        });
+    }
 }
