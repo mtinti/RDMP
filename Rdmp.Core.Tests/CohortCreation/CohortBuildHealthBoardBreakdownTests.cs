@@ -15,6 +15,7 @@ using NUnit.Framework;
 using Rdmp.Core.CohortCreation;
 using Rdmp.Core.CommandExecution;
 using Rdmp.Core.CommandExecution.AtomicCommands;
+using Rdmp.Core.Curation;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 using Rdmp.Core.Curation.Data.Cohort;
@@ -107,12 +108,43 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
         foreach (var a in new[] { aggRegistry, aggDemography, aggExcl1, aggExcl2, aggExcl3, aggExcl4 })
             cic.EnsureNamingConvention(a);
 
+        // ---- region lookup table (z_hb_lookup), in the same db as demography ----
+        var lk = new DataTable();
+        foreach (var c in new[] { "HB_9_DIGIT", "HB_Name", "HB_Code", "Region", "SafeHaven_Region" })
+            lk.Columns.Add(c);
+        void L(string nine, string name, object code, string region, object node) =>
+            lk.Rows.Add(nine, name, code, region, node);
+        L("S08000001", "Ayrshire & Arran", 11, "A", "West");
+        L("S08000002", "Borders", 6, "B", "South East");
+        L("S08000003", "Dumfries & Galloway", 12, "Y", "West");
+        L("S08000004", "Fife", 4, "F", "East");
+        L("S08000005", "Forth Valley", 7, "V", "East");
+        L("S08000006", "Grampian", 2, "N", "North");
+        L("S08000007", "Greater Glasgow & Clyde", 16, "G", "West");
+        L("S08000008", "Highland", 17, "H", "North");
+        L("S08000009", "Lanarkshire", 10, "L", "West");
+        L("S08000010", "Lothian", 5, "S", "South East");
+        L("S08000011", "Orkney", 13, "R", "North");
+        L("S08000012", "Shetland", 14, "Z", "North");
+        L("S08000013", "Tayside", 3, "T", "East");
+        L("S08000014", "Western Isles", 15, "W", "North");
+        L("S08200001", "England/Wales/Northern Ireland", DBNull.Value, "E", DBNull.Value);
+        L("S08200002", "No Fixed Abode", DBNull.Value, "O", DBNull.Value);
+        L("S08200003", "Not Known", DBNull.Value, "K", DBNull.Value);
+        L("S08200004", "OutsideUK", DBNull.Value, "X", DBNull.Value);
+        var lookupTbl = db.CreateTable("z_hb_lookup", lk);
+        new TableInfoImporter(CatalogueRepository, lookupTbl).DoImport(out var lookupTableInfo, out _);
+
+        var regionColumn = demogCata.GetAllExtractionInformation(ExtractionCategory.Any)
+            .Single(e => e.GetRuntimeName().Equals("Region", StringComparison.OrdinalIgnoreCase)).ColumnInfo;
+
         // ---- run the command ----
         var file = new FileInfo(Path.GetTempFileName());
         try
         {
             var cmd = new ExecuteCommandExportCohortBuildHealthBoardBreakdown(
-                new ThrowImmediatelyActivator(RepositoryLocator, null), cic, file, demogCata.Name, "Region");
+                new ThrowImmediatelyActivator(RepositoryLocator, null), cic, demogCata, regionColumn,
+                (TableInfo)lookupTableInfo, file);
             Assert.That(cmd.IsImpossible, Is.False, cmd.ReasonCommandImpossible);
             cmd.Execute();
 
@@ -257,40 +289,43 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
 /// <summary>No-database tests for the wide report projection and the name cleaner.</summary>
 public class CohortBuildHealthBoardBreakdownReportTests
 {
-    [Test]
-    public void Split_SeparatesScottishOtherAndNotKnown()
+    // lookup recognising T and G but not X (so X -> Other)
+    private static RegionLookup Lookup() => new(new Dictionary<string, (string, string)>
     {
-        // Total 100; T=50, G=30 (Scottish), X=15 (present but not a Scottish board) -> Other 15;
+        ["T"] = ("Tayside", "East"),
+        ["G"] = ("Greater Glasgow & Clyde", "West")
+    });
+
+    [Test]
+    public void Split_SeparatesRecognisedOtherAndNotKnown()
+    {
+        // Total 100; T=50, G=30 (recognised), X=15 (present but not in the lookup) -> Other 15;
         // NotKnown = 100 - 80 - 15 = 5 (not in demography / null region)
         var b = CohortBuildHealthBoardBreakdownReport.Split(100,
-            new Dictionary<string, int> { ["T"] = 50, ["G"] = 30, ["X"] = 15 });
+            new Dictionary<string, int> { ["T"] = 50, ["G"] = 30, ["X"] = 15 }, Lookup());
 
         Assert.Multiple(() =>
         {
             Assert.That(b.Total, Is.EqualTo(100));
-            Assert.That(b.Boards["T"], Is.EqualTo(50));
-            Assert.That(b.Boards["G"], Is.EqualTo(30));
-            Assert.That(b.Boards.ContainsKey("X"), Is.False); // non-Scottish code is NOT a board
-            Assert.That(b.Other, Is.EqualTo(15));             // it lands in Other
-            Assert.That(b.NotKnown, Is.EqualTo(5));           // residual
-            Assert.That(b.Boards.Values.Sum() + b.Other + b.NotKnown, Is.EqualTo(b.Total));
+            Assert.That(b.Regions["T"], Is.EqualTo(50));
+            Assert.That(b.Regions["G"], Is.EqualTo(30));
+            Assert.That(b.Regions.ContainsKey("X"), Is.False); // unrecognised code is NOT a region column
+            Assert.That(b.Other, Is.EqualTo(15));              // it lands in Other
+            Assert.That(b.NotKnown, Is.EqualTo(5));            // residual
+            Assert.That(b.Regions.Values.Sum() + b.Other + b.NotKnown, Is.EqualTo(b.Total));
         });
     }
 
     [Test]
     public void ToCsv_WideHeaderAndMetricRows()
     {
-        var nodes = new List<CohortBuildHealthBoardBreakdownReport.NodeBreakdown>
+        var nodes = new List<CohortBuildBreakdownNode>
         {
-            new()
-            {
-                Seq = 0, Type = "Container", Name = "Root", Container = "", SetOperation = "EXCEPT",
-                FinalUnfiltered = 80, CumulativeUnfiltered = null,
-                FinalByRegion = new Dictionary<string, int> { ["T"] = 50, ["G"] = 30 }
-            }
+            new(0, "Container", "Root", "", "EXCEPT", 0, 80, null,
+                new Dictionary<string, int> { ["T"] = 50, ["G"] = 30 }, null)
         };
 
-        var csv = CohortBuildHealthBoardBreakdownReport.ToCsv(nodes);
+        var csv = CohortBuildHealthBoardBreakdownReport.ToCsv(nodes, Lookup());
         var header = csv.Split('\n')[0].Trim();
 
         Assert.Multiple(() =>
