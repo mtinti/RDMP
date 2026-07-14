@@ -34,7 +34,7 @@ namespace Rdmp.Core.Tests.CohortCreation;
 /// cohort partitioned across 3 boards (1 patient ↔ 1 board). Requires the test SQL Server + a query
 /// cache (see mac-test-env).
 /// </summary>
-public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
+public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
 {
     private static IEnumerable<string> Ids(int from, int to) =>
         Enumerable.Range(from, to - from + 1).Select(i => $"P{i:000}");
@@ -133,18 +133,21 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
         L("S08200003", "Not Known", DBNull.Value, "K", DBNull.Value);
         L("S08200004", "OutsideUK", DBNull.Value, "X", DBNull.Value);
         var lookupTbl = db.CreateTable("z_hb_lookup", lk);
-        new TableInfoImporter(CatalogueRepository, lookupTbl).DoImport(out var lookupTableInfo, out _);
+        new TableInfoImporter(CatalogueRepository, lookupTbl).DoImport(out _, out var lookupCols);
 
-        var regionColumn = demogCata.GetAllExtractionInformation(ExtractionCategory.Any)
+        ColumnInfo LookupCol(string name) => lookupCols.Single(c =>
+            c.GetRuntimeName().Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        var groupColumn = demogCata.GetAllExtractionInformation(ExtractionCategory.Any)
             .Single(e => e.GetRuntimeName().Equals("Region", StringComparison.OrdinalIgnoreCase)).ColumnInfo;
 
-        // ---- run the command ----
+        // ---- run the command (4 columns; tables derived) ----
         var file = new FileInfo(Path.GetTempFileName());
         try
         {
-            var cmd = new ExecuteCommandExportCohortBuildHealthBoardBreakdown(
-                new ThrowImmediatelyActivator(RepositoryLocator, null), cic, demogCata, regionColumn,
-                (TableInfo)lookupTableInfo, file);
+            var cmd = new ExecuteCommandExportCohortBuildBreakDownByGroups(
+                new ThrowImmediatelyActivator(RepositoryLocator, null), cic, groupColumn,
+                LookupCol("Region"), LookupCol("HB_Name"), LookupCol("SafeHaven_Region"), file);
             Assert.That(cmd.IsImpossible, Is.False, cmd.ReasonCommandImpossible);
             cmd.Execute();
 
@@ -194,7 +197,7 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
                 Assert.That(w.Percent(G), Is.EqualTo("29.3"));
                 Assert.That(w.Percent(F), Is.EqualTo("20.7"));
 
-                // % of demography row (BB_Demography = 100 people: T50 G30 F20) - the sanity-check reference
+                // % of reference population row (BB_Demography = 100 people: T50 G30 F20) - the sanity-check reference
                 Assert.That(w.DemogPercent(T), Is.EqualTo("50.0"));
                 Assert.That(w.DemogPercent(G), Is.EqualTo("30.0"));
                 Assert.That(w.DemogPercent(F), Is.EqualTo("20.0"));
@@ -252,9 +255,9 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
                 var c = line.Split(',');
                 if (c[0] == "Order")
                     continue; // the header is repeated just above the percentage rows
-                if (c[_col["Metric"]] == CohortBuildHealthBoardBreakdownReport.PercentMetric)
+                if (c[_col["Metric"]] == CohortBuildBreakdownByGroupsReport.PercentMetric)
                     _percent = c;
-                else if (c[_col["Metric"]] == CohortBuildHealthBoardBreakdownReport.DemographyPercentMetric)
+                else if (c[_col["Metric"]] == CohortBuildBreakdownByGroupsReport.ReferencePercentMetric)
                     _demogPercent = c;
                 else
                     _data.Add(c);
@@ -287,10 +290,10 @@ public class CohortBuildHealthBoardBreakdownTests : FromToDatabaseTests
 }
 
 /// <summary>No-database tests for the wide report projection and the name cleaner.</summary>
-public class CohortBuildHealthBoardBreakdownReportTests
+public class CohortBuildBreakdownByGroupsReportTests
 {
     // lookup recognising T and G but not X (so X -> Other)
-    private static RegionLookup Lookup() => new(new Dictionary<string, (string, string)>
+    private static GroupLookup Lookup() => new(new Dictionary<string, (string, string)>
     {
         ["T"] = ("Tayside", "East"),
         ["G"] = ("Greater Glasgow & Clyde", "West")
@@ -301,18 +304,18 @@ public class CohortBuildHealthBoardBreakdownReportTests
     {
         // Total 100; T=50, G=30 (recognised), X=15 (present but not in the lookup) -> Other 15;
         // NotKnown = 100 - 80 - 15 = 5 (not in demography / null region)
-        var b = CohortBuildHealthBoardBreakdownReport.Split(100,
+        var b = CohortBuildBreakdownByGroupsReport.Split(100,
             new Dictionary<string, int> { ["T"] = 50, ["G"] = 30, ["X"] = 15 }, Lookup());
 
         Assert.Multiple(() =>
         {
             Assert.That(b.Total, Is.EqualTo(100));
-            Assert.That(b.Regions["T"], Is.EqualTo(50));
-            Assert.That(b.Regions["G"], Is.EqualTo(30));
-            Assert.That(b.Regions.ContainsKey("X"), Is.False); // unrecognised code is NOT a region column
+            Assert.That(b.Groups["T"], Is.EqualTo(50));
+            Assert.That(b.Groups["G"], Is.EqualTo(30));
+            Assert.That(b.Groups.ContainsKey("X"), Is.False); // unrecognised code is NOT a region column
             Assert.That(b.Other, Is.EqualTo(15));              // it lands in Other
             Assert.That(b.NotKnown, Is.EqualTo(5));            // residual
-            Assert.That(b.Regions.Values.Sum() + b.Other + b.NotKnown, Is.EqualTo(b.Total));
+            Assert.That(b.Groups.Values.Sum() + b.Other + b.NotKnown, Is.EqualTo(b.Total));
         });
     }
 
@@ -325,7 +328,7 @@ public class CohortBuildHealthBoardBreakdownReportTests
                 new Dictionary<string, int> { ["T"] = 50, ["G"] = 30 }, null)
         };
 
-        var csv = CohortBuildHealthBoardBreakdownReport.ToCsv(nodes, Lookup());
+        var csv = CohortBuildBreakdownByGroupsReport.ToCsv(nodes, Lookup());
         var header = csv.Split('\n')[0].Trim();
 
         Assert.Multiple(() =>
@@ -342,14 +345,14 @@ public class CohortBuildHealthBoardBreakdownReportTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.CleanName(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.CleanName(
                     "cic_18286_cic_18284_cic_17950_cic_16459_People in SHARE Current For Contact [Recruitment]"),
                 Is.EqualTo("People in SHARE Current For Contact [Recruitment]"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.CleanName(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.CleanName(
                     "cic_18286_cic_18284_cic_17950_Excl Grp 1 and 2"),
                 Is.EqualTo("Excl Grp 1 and 2"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.CleanName("Root"), Is.EqualTo("Root"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.CleanName(null), Is.EqualTo(""));
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.CleanName("Root"), Is.EqualTo("Root"));
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.CleanName(null), Is.EqualTo(""));
         });
     }
 
@@ -359,15 +362,15 @@ public class CohortBuildHealthBoardBreakdownReportTests
         Assert.Multiple(() =>
         {
             // Oracle spells EXCEPT as MINUS; everything else is the ANSI keyword
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.SetOperationSql(
                 SetOperation.EXCEPT, DatabaseType.Oracle), Is.EqualTo("MINUS"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.SetOperationSql(
                 SetOperation.EXCEPT, DatabaseType.MicrosoftSQLServer), Is.EqualTo("EXCEPT"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.SetOperationSql(
                 SetOperation.EXCEPT, DatabaseType.PostgreSql), Is.EqualTo("EXCEPT"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.SetOperationSql(
                 SetOperation.UNION, DatabaseType.Oracle), Is.EqualTo("UNION"));
-            Assert.That(ExecuteCommandExportCohortBuildHealthBoardBreakdown.SetOperationSql(
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.SetOperationSql(
                 SetOperation.INTERSECT, DatabaseType.Oracle), Is.EqualTo("INTERSECT"));
         });
     }
