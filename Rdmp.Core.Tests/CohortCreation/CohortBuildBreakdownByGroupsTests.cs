@@ -108,6 +108,7 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
 
         // enabled-but-EMPTY container: under NON-strict validation RDMP's builder skips these
         // (strict validation would fail the whole build instead); our walk must match the skip
+        var priorStrict = Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers;
         Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = false;
         var emptyC = new CohortAggregateContainer(CatalogueRepository, SetOperation.UNION) { Name = "EmptyC" };
         emptyC.SaveToDatabase();
@@ -223,7 +224,7 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
         }
         finally
         {
-            Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = true;
+            Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = priorStrict;
             file.Delete();
         }
     }
@@ -436,6 +437,9 @@ public class CohortBuildBreakdownByGroupsReportTests
             Assert.That(T("chi * 1"), Is.True);
             Assert.That(T("CASE WHEN x THEN y END"), Is.True);
             Assert.That(T("other_column"), Is.True);
+            // an alias only renames the output column - judge the UNDERLYING expression
+            Assert.That(T("UPPER(chi) AS chi"), Is.True,   "transform hidden behind an alias must be rejected");
+            Assert.That(T("[db]..[tbl].[chi] AS PatientId"), Is.False, "aliased plain column is safe (values are raw chi)");
             // plain (possibly qualified) references pass
             Assert.That(T("[db]..[tbl].[chi]"), Is.False);
             Assert.That(T("chi"), Is.False);
