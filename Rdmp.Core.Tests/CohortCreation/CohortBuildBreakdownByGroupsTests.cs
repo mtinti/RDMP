@@ -109,6 +109,9 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
         // enabled-but-EMPTY container: under NON-strict validation RDMP's builder skips these
         // (strict validation would fail the whole build instead); our walk must match the skip
         var priorStrict = Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers;
+        FileInfo file = null;
+        try
+        {
         Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = false;
         var emptyC = new CohortAggregateContainer(CatalogueRepository, SetOperation.UNION) { Name = "EmptyC" };
         emptyC.SaveToDatabase();
@@ -152,9 +155,7 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
             .Single(e => e.GetRuntimeName().Equals("Region", StringComparison.OrdinalIgnoreCase)).ColumnInfo;
 
         // ---- run the command (4 columns; tables derived) ----
-        var file = new FileInfo(Path.GetTempFileName());
-        try
-        {
+        file = new FileInfo(Path.GetTempFileName());
             var cmd = new ExecuteCommandExportCohortBuildBreakDownByGroups(
                 new ThrowImmediatelyActivator(RepositoryLocator, null), cic, groupColumn,
                 LookupCol("Region"), LookupCol("HB_Name"), file, LookupCol("SafeHaven_Region"));
@@ -225,7 +226,7 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
         finally
         {
             Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = priorStrict;
-            file.Delete();
+            file?.Delete();
         }
     }
 
@@ -367,6 +368,25 @@ public class CohortBuildBreakdownByGroupsReportTests
             Assert.That(header, Does.Contain("Tayside"));
             Assert.That(header, Does.EndWith("Other,NotKnown"));
             Assert.That(csv, Does.Contain("% of final cohort"));
+        });
+    }
+
+    [Test]
+    public void PostgreSqlSameDatabaseError_NormalizesWrappedNames()
+    {
+        var syntax = FAnsi.Implementations.PostgreSql.PostgreSqlSyntaxHelper.Instance;
+        string E(string cache, string reference) => ExecuteCommandExportCohortBuildBreakDownByGroups
+            .PostgreSqlSameDatabaseError(cache, reference, syntax);
+
+        Assert.Multiple(() =>
+        {
+            // RDMP stores TableInfo.Database wrapped ("mydb") but the cache database unwrapped
+            Assert.That(E("mydb", "\"mydb\""), Is.Null, "wrapped vs plain same name must be accepted");
+            Assert.That(E("mydb", "mydb"), Is.Null);
+            Assert.That(E("cache_db", "\"other_db\""), Is.Not.Null, "different databases must be rejected");
+            Assert.That(E("Foo", "foo"), Is.Not.Null, "quoted PostgreSQL identifiers are case-sensitive");
+            Assert.That(E("", "mydb"), Is.Not.Null, "blank database name must be rejected clearly");
+            Assert.That(E("mydb", null), Is.Not.Null);
         });
     }
 
