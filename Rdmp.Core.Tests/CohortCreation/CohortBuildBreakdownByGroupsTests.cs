@@ -106,6 +106,14 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
         aggRegistry.Order = 0;
         aggDemography.Order = 1;
 
+        // enabled-but-EMPTY container: under NON-strict validation RDMP's builder skips these
+        // (strict validation would fail the whole build instead); our walk must match the skip
+        Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = false;
+        var emptyC = new CohortAggregateContainer(CatalogueRepository, SetOperation.UNION) { Name = "EmptyC" };
+        emptyC.SaveToDatabase();
+        root.AddChild(emptyC);
+        emptyC.Order = 5;
+
         foreach (var a in new[] { aggRegistry, aggDemography, aggExcl1, aggExcl2, aggExcl3, aggExcl4 })
             cic.EnsureNamingConvention(a);
 
@@ -204,6 +212,10 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
                 Assert.That(w.DemogPercent(F), Is.EqualTo("20.0"));
             });
 
+            // the enabled-but-empty container must not appear in the output
+            Assert.That(w.Keys.Any(k => k.name.Contains("EmptyC", StringComparison.Ordinal)), Is.False,
+                "enabled-but-empty container should be skipped like RDMP's builder does");
+
             // ---- partition: every data row's columns after Total sum back to Total ----
             foreach (var (name, metric) in w.Keys)
                 Assert.That(w.SumAfterTotal(name, metric), Is.EqualTo(w.Cell(name, metric, "Total")),
@@ -211,8 +223,24 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
         }
         finally
         {
+            Rdmp.Core.ReusableLibraryCode.Settings.UserSettings.StrictValidationForCohortBuilderContainers = true;
             file.Delete();
         }
+    }
+
+    [Test]
+    public void GroupLookup_LoadFrom_RejectsDuplicateKeys()
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var dt = new DataTable();
+        dt.Columns.Add("code");
+        dt.Columns.Add("label");
+        dt.Rows.Add("T", "Tayside");
+        dt.Rows.Add("t", "Tayside duplicate"); // same key differing only by case
+        var tbl = db.CreateTable("dup_lookup", dt);
+
+        Assert.That(() => GroupLookup.LoadFrom(tbl, "code", "label", null, 30),
+            Throws.ArgumentException.With.Message.Contain("duplicate key"));
     }
 
     private static DataTable OneCol(string col, IEnumerable<string> values)
@@ -393,16 +421,25 @@ public class CohortBuildBreakdownByGroupsReportTests
     }
 
     [Test]
-    public void IsTransformedIdentifier_DetectsExpressions()
+    public void IsTransformedIdentifier_WhitelistsPlainColumnReferencesOnly()
     {
+        var syntax = FAnsi.Implementations.MicrosoftSQL.MicrosoftQuerySyntaxHelper.Instance;
+        bool T(string sql) => ExecuteCommandExportCohortBuildBreakDownByGroups
+            .IsTransformedIdentifier(sql, "chi", syntax);
+
         Assert.Multiple(() =>
         {
-            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("UPPER(chi)"), Is.True);
-            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("chi + '0'"), Is.True);
-            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("CASE WHEN x THEN y END"), Is.True);
-            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("[db]..[tbl].[chi]"), Is.False);
-            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("chi"), Is.False);
-            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier(null), Is.False);
+            // anything that is not a plain reference to the physical column is transformed
+            Assert.That(T("UPPER(chi)"), Is.True);
+            Assert.That(T("chi + '0'"), Is.True);
+            Assert.That(T("chi - 1"), Is.True);
+            Assert.That(T("chi * 1"), Is.True);
+            Assert.That(T("CASE WHEN x THEN y END"), Is.True);
+            Assert.That(T("other_column"), Is.True);
+            // plain (possibly qualified) references pass
+            Assert.That(T("[db]..[tbl].[chi]"), Is.False);
+            Assert.That(T("chi"), Is.False);
+            Assert.That(T(null), Is.False);
         });
     }
 }
