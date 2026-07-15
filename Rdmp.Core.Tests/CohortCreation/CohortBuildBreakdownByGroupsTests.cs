@@ -40,21 +40,19 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
     private static IEnumerable<string> Ids(int from, int to) =>
         Enumerable.Range(from, to - from + 1).Select(i => $"P{i:000}");
 
-    [Test]
+    [TestCase(DatabaseType.MicrosoftSQLServer)]
+    [TestCase(DatabaseType.PostgreSql)] // requires mac-test-env/multidb.sh up (skips if no PostgreSql line)
     [Retry(3)] // DB integration test: absorb the occasional transient SQL error under local load
-    public void BuildBreakdown_Fixture_NationalAndThreeBoards()
+    public void BuildBreakdown_Fixture_NationalAndThreeBoards(DatabaseType dbType)
     {
-        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var db = GetCleanedServer(dbType);
 
-        // ---- query cache ----
-        var cacheDb = DiscoveredServerICanCreateRandomDatabasesAndTablesOn.ExpectDatabase(
-            $"{TestDatabaseNames.Prefix}QueryCacheHB");
-        if (cacheDb.Exists())
-            DeleteTables(cacheDb);
+        // ---- query cache: created IN THE SAME database as the data. Works on every DBMS and is
+        // REQUIRED on PostgreSQL, where one connection cannot access another database ----
         var patcher = new QueryCachingPatcher();
-        new MasterDatabaseScriptExecutor(cacheDb).CreateAndPatchDatabase(patcher, new AcceptAllCheckNotifier());
+        new MasterDatabaseScriptExecutor(db).CreateAndPatchDatabase(patcher, new AcceptAllCheckNotifier());
         var cacheServer = new ExternalDatabaseServer(CatalogueRepository, "HBQueryCache", patcher);
-        cacheServer.SetProperties(cacheDb);
+        cacheServer.SetProperties(db);
 
         // ---- synthetic data (see fixture doc) ----
         var demog = new DataTable();
