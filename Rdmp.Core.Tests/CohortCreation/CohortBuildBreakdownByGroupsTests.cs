@@ -13,6 +13,7 @@ using FAnsi;
 using FAnsi.Discovery;
 using NUnit.Framework;
 using Rdmp.Core.CohortCreation;
+using RdmpCohortBuildBreakdownByGroups;
 using Rdmp.Core.CommandExecution;
 using Rdmp.Core.CommandExecution.AtomicCommands;
 using Rdmp.Core.Curation;
@@ -147,7 +148,7 @@ public class CohortBuildBreakdownByGroupsTests : FromToDatabaseTests
         {
             var cmd = new ExecuteCommandExportCohortBuildBreakDownByGroups(
                 new ThrowImmediatelyActivator(RepositoryLocator, null), cic, groupColumn,
-                LookupCol("Region"), LookupCol("HB_Name"), LookupCol("SafeHaven_Region"), file);
+                LookupCol("Region"), LookupCol("HB_Name"), file, LookupCol("SafeHaven_Region"));
             Assert.That(cmd.IsImpossible, Is.False, cmd.ReasonCommandImpossible);
             cmd.Execute();
 
@@ -372,6 +373,36 @@ public class CohortBuildBreakdownByGroupsReportTests
                 SetOperation.UNION, DatabaseType.Oracle), Is.EqualTo("UNION"));
             Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.SetOperationSql(
                 SetOperation.INTERSECT, DatabaseType.Oracle), Is.EqualTo("INTERSECT"));
+        });
+    }
+
+    [Test]
+    public void GroupLookup_RejectsDuplicateAndReservedLabels()
+    {
+        // duplicate label: two codes would render as identically named columns
+        var dup = new Dictionary<string, (string, string)> { ["A"] = ("Same", "X"), ["B"] = ("same", "Y") };
+        Assert.That(() => new GroupLookup(dup), Throws.ArgumentException.With.Message.Contain("duplicate label"));
+
+        // reserved label collides with a fixed report header
+        var reserved = new Dictionary<string, (string, string)> { ["A"] = ("Total", null) };
+        Assert.That(() => new GroupLookup(reserved), Throws.ArgumentException.With.Message.Contain("collides"));
+
+        // clean lookup constructs fine, NULL grouping allowed
+        Assert.That(() => new GroupLookup(new Dictionary<string, (string, string)>
+            { ["A"] = ("Ayrshire", "West"), ["E"] = ("England", null) }), Throws.Nothing);
+    }
+
+    [Test]
+    public void IsTransformedIdentifier_DetectsExpressions()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("UPPER(chi)"), Is.True);
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("chi + '0'"), Is.True);
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("CASE WHEN x THEN y END"), Is.True);
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("[db]..[tbl].[chi]"), Is.False);
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier("chi"), Is.False);
+            Assert.That(ExecuteCommandExportCohortBuildBreakDownByGroups.IsTransformedIdentifier(null), Is.False);
         });
     }
 }
