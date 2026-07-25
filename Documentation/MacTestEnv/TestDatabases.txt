@@ -12,7 +12,9 @@ Password:	YourStrong!Passw0rd
 #Uncomment to run tests with a YamlRepository
 #UseFileSystemRepo: true
 #MySql:	server=127.0.0.1;Uid=root;Pwd=YourStrong!Passw0rd;AllowPublicKeyRetrieval=True
-#PostgreSql:	User ID=postgres;Password=;Host=127.0.0.1;Port=5432
+# Enable via: bash Documentation/MacTestEnv/multidb.sh up (starts the containers and uncomments these)
+#PostgreSql:	User ID=postgres;Password=YourStrong!Passw0rd;Host=127.0.0.1;Port=5432
+#Oracle-conn:	see multidb.sh; enabled automatically as Oracle: when the container is up
 Oracle:
 #User accounts you can create with limited access rights (e.g. connect list databases etc).  These users will be used in low privilege tests
 #The account will be granted limited read/write access to databases on a per test basis (See DatabaseTests.SetupLowPrivilegeUserRightsFor)

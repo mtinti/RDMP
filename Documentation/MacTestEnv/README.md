@@ -373,3 +373,58 @@ Check `docker logs rdmp-mssql`.  Common causes:
   * Insufficient memory (Docker Desktop default 2 GB; bump to ≥ 4 GB).
   * Password rejected (see above).
   * Rosetta disabled on Apple Silicon.
+
+---
+
+## Multi-DBMS testing (PostgreSQL + Oracle)
+
+RDMP supports SQL Server, MySQL, PostgreSQL and Oracle. The compose file defines two optional services
+behind profiles, so the default `docker compose up -d` still starts only SQL Server.
+
+### TL;DR
+
+```bash
+bash Documentation/MacTestEnv/multidb.sh up      # start postgres+oracle, create the pg scratch DB, enable test lines
+dotnet build Rdmp.Core.Tests/Rdmp.Core.Tests.csproj -c Debug -p:WarningsNotAsErrors='"NU1902;NU1903;NU1904"'
+# ... run whatever DBMS-parameterised tests you need ...
+bash Documentation/MacTestEnv/multidb.sh down    # stop them and re-disable the test lines
+bash Documentation/MacTestEnv/multidb.sh status
+```
+
+### The services
+
+| Service | Image | Container | Port | Notes |
+|---|---|---|---|---|
+| postgres | `postgres:16` | `rdmp-postgres` | 5432 | native arm64; starts in seconds |
+| oracle | `gvenzl/oracle-free:23-slim` | `rdmp-oracle` | 1521 | native arm64 (Oracle Free); needs 2-3 GB RAM; service `FREEPDB1`, user `system` |
+
+Credentials are in `docker-compose.yml` (throwaway dev values, as with the SQL Server container).
+
+### How the wiring works
+
+RDMP's DBMS-parameterised tests (`[TestCase(DatabaseType.PostgreSql)]` etc.) run only when the matching
+line in `Tests.Common/TestDatabases.txt` is present; otherwise they skip. `multidb.sh up` enables the
+`PostgreSql:` and `Oracle:` lines and `down` disables them (an enabled line with the container absent
+means failures rather than skips, so keep them in sync). `TestDatabases.txt` is copied to the test
+output directory at build time - rebuild the test project after enabling or disabling.
+
+PostgreSQL quirks worth knowing:
+- the tests expect the scratch database to already exist and its name is case-sensitive; `multidb.sh up`
+  creates `"TEST_ScratchArea"` for you.
+- one PostgreSQL connection can only access one database, so multi-database features (for example a
+  query cache in a different database from the data) must be arranged within a single database.
+
+### Verified findings (2026-07-15, macOS arm64)
+
+Smoke test: `dotnet test --filter FullyQualifiedName~QueryCachingCrossServerTests.Create_QueryCache`
+
+- **PostgreSQL: passes.** RDMP creates its query-cache database on PostgreSQL via
+  `MasterDatabaseScriptExecutor` + `QueryCachingPatcher`, so cache-dependent features are end-to-end
+  testable on PostgreSQL.
+- **Oracle: fails before reaching the database.** `RuntimeNameException: Table name
+  'CachedAggregateConfigurationRe' is too long for the DBMS (Oracle supports maximum length of 30)`.
+  The cache bookkeeping table name (`CachedAggregateConfigurationResults`, 35 characters) exceeds
+  FAnsi's conservative 30-character Oracle identifier cap; Oracle itself has allowed 128-character
+  identifiers since 12.2 (creating the same table via sqlplus in the container succeeds). Until the cap
+  is raised in FAnsiSql, query caching - and anything depending on it - cannot work on Oracle. The
+  container remains useful for non-cache Oracle tests.

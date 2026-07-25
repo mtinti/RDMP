@@ -22,5 +22,51 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # Optional multi-DBMS services for cross-database testing.
+  # Start with:  docker compose --profile postgres --profile oracle up -d
+  # (plain `docker compose up -d` starts only mssql)
+
+  postgres:
+    image: postgres:16
+    container_name: rdmp-postgres
+    profiles: ["postgres"]
+    # native arm64 image - no Rosetta needed
+    environment:
+      POSTGRES_PASSWORD: "YourStrong!Passw0rd"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: rdmp-oracle
+    profiles: ["oracle"]
+    # gvenzl/oracle-free ships a native arm64 image (Oracle Database 23ai Free).
+    # First start takes several minutes (database creation); needs ~2-3 GB RAM.
+    environment:
+      ORACLE_PASSWORD: "YourStrong1Passw0rd"   # Oracle rejects '!' in some tools; keep it simple
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      # the image ships its own healthcheck script
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 120s
+    restart: unless-stopped
+
 volumes:
   mssql-data:
+  postgres-data:
+  oracle-data:
